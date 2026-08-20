@@ -2,11 +2,11 @@
 set -Eeuo pipefail
 
 # Write and prepare a KV260 Ubuntu image.
-# Usage: sudo ./prepare_kv260_image.sh image.img /dev/sda 20
+# Usage: sudo ./prepare_kv260_image.sh image.img /dev/sdX 1
 
 IMAGE_PATH="${1:-}"
 DISK="${2:-}"
-LAST_OCTET="${3:-}"
+BOARD_ID="${3:-}"
 
 die() {
   echo "错误: $*" >&2
@@ -14,8 +14,8 @@ die() {
 }
 
 usage() {
-  echo "用法: sudo $0 image.img /dev/sda IP最后一段" >&2
-  echo "示例: sudo $0 kv260.img /dev/sda 20" >&2
+  echo "用法: sudo $0 image.img /dev/sdX KV260编号" >&2
+  echo "示例: sudo $0 kv260.img /dev/sdb 1" >&2
   exit 2
 }
 
@@ -23,8 +23,8 @@ usage() {
 [[ $EUID -eq 0 ]] || die "请使用 root 运行此脚本"
 [[ -f "$IMAGE_PATH" ]] || die "镜像文件不存在: $IMAGE_PATH"
 [[ -b "$DISK" ]] || die "目标不是块设备: $DISK"
-[[ "$LAST_OCTET" =~ ^([1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$ ]] || \
-  die "IP 最后一段必须是 1-254: $LAST_OCTET"
+[[ "$BOARD_ID" =~ ^([1-9]|1[0-9]|20)$ ]] || die "KV260 板号必须在 1-20 之间: $BOARD_ID"
+LAST_OCTET=$((81 + BOARD_ID))
 
 for command in blockdev dd partprobe udevadm lsblk mount umount mountpoint \
   growpart e2fsck resize2fs blkid curl gpg usermod groupmod chpasswd; do
@@ -100,8 +100,8 @@ KRIA_PPA_HTTPS='https://ppa.launchpadcontent.net/ubuntu-xilinx/kria/ubuntu/'
 KRIA_KEYRING="$ROOT_MNT/etc/apt/keyrings/ubuntu-xilinx-kria.gpg"
 KRIA_KEY_FINGERPRINT='803DDF595EA7B6644F9B96B752150A179A9E84C9'
 IP="192.168.31.${LAST_OCTET}/24"
-HOSTNAME="KV260-${LAST_OCTET}"
-INSTANCE_ID="kv260-${LAST_OCTET}"
+HOSTNAME="kv260${BOARD_ID}"
+INSTANCE_ID="kv260${BOARD_ID}"
 
 NETWORK_CONFIG=$(cat <<EOF
 network:
@@ -252,7 +252,8 @@ chmod 0644 "$USER_DATA"
 sync
 echo "已完成: $DISK"
 echo "镜像: $IMAGE_PATH"
-echo "IP: $IP"
+echo "KV260 编号: $BOARD_ID"
 echo "主机名: $HOSTNAME"
-echo "用户/密码: ubuntu/ubuntu"
+echo "IP: $IP"
+echo "用户: ubuntu"
 echo "SSH: 已启用密码登录，ubuntu 免密 sudo"
