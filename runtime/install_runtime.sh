@@ -17,7 +17,23 @@ die() {
 [[ -d "$CHECK_DIR" ]] || die "找不到检查脚本目录: $CHECK_DIR"
 
 if command -v cloud-init >/dev/null 2>&1; then
+  # cloud-init exit code 2 means it completed with recoverable warnings;
+  # those warnings must not block the Runtime Factory.
+  set +e
   cloud-init status --wait
+  CLOUD_INIT_RC=$?
+  set -e
+
+  case "$CLOUD_INIT_RC" in
+    0)
+      ;;
+    2)
+      echo "WARNING: cloud-init completed with recoverable warnings, continue runtime installation"
+      ;;
+    *)
+      die "cloud-init failed with exit code $CLOUD_INIT_RC"
+      ;;
+  esac
 fi
 
 echo "========================================"
