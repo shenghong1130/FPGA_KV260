@@ -2,6 +2,9 @@
 # Ensure the zocl module matches the running KV260 kernel.
 set -Eeuo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CHECK_SCRIPT="$SCRIPT_DIR/../scripts/check_zocl.sh"
+
 [[ $EUID -eq 0 ]] || {
   echo "请使用 sudo 运行 $0" >&2
   exit 1
@@ -25,10 +28,4 @@ fi
 
 depmod -a "$kernel"
 modprobe zocl
-
-if [[ -e /dev/dri/renderD128 ]]; then
-  echo "zocl check: OK (/dev/dri/renderD128 present)"
-else
-  echo "zocl check: module loaded but /dev/dri/renderD128 is absent" >&2
-  exit 1
-fi
+"$CHECK_SCRIPT"

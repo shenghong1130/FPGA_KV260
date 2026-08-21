@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PREPARE_SCRIPT="$SCRIPT_DIR/prepare_kv260_image.sh"
-RUNTIME_DIR="$SCRIPT_DIR/runtime"
+RUNTIME_INIT_SCRIPT="$SCRIPT_DIR/runtime_init_kv260.sh"
 LOG_DIR="$SCRIPT_DIR/logs"
 WAIT_TIMEOUT_SECONDS=1800
 
@@ -37,8 +37,8 @@ IMAGE_PATH="$3"
 [[ -b "$DISK" ]] || die "目标不是块设备: $DISK"
 [[ -f "$IMAGE_PATH" ]] || die "镜像文件不存在: $IMAGE_PATH"
 [[ -x "$PREPARE_SCRIPT" ]] || die "找不到可执行写卡脚本: $PREPARE_SCRIPT"
-[[ -d "$RUNTIME_DIR" ]] || die "找不到 Runtime 目录: $RUNTIME_DIR"
-for command in lsblk ping ssh tar tee; do
+[[ -x "$RUNTIME_INIT_SCRIPT" ]] || die "找不到可执行 Runtime 入口: $RUNTIME_INIT_SCRIPT"
+for command in lsblk ping tee; do
   command -v "$command" >/dev/null || die "缺少命令: $command"
 done
 
@@ -52,7 +52,6 @@ done < <(lsblk -nrpo NAME,MOUNTPOINT "$DISK" | awk 'NF > 1 {print $1, $2}')
 
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/${HOSTNAME}.log"
-KNOWN_HOSTS="$LOG_DIR/known_hosts"
 
 cat <<EOF
 ========================================
@@ -95,26 +94,25 @@ done
 
 printf '[%s] %s is reachable\n' "$(date -Is)" "$HOSTNAME" | tee -a "$LOG_FILE"
 
-# accept-new records a first connection without accepting changed host keys.
-SSH_OPTIONS=(
-  -o StrictHostKeyChecking=accept-new
-  -o UserKnownHostsFile="$KNOWN_HOSTS"
-  -o ConnectTimeout=10
-)
-SSH_TARGET="ubuntu@${IP_ADDRESS}"
-
 cat <<EOF
 
-SSH Runtime deployment starts now. For password authentication, enter the current
-ubuntu password when SSH asks; SSH keys work without an interactive password.
+目标已上线。现在调用 runtime_init_kv260.sh，通过 SSH 在 ARM64 KV260 上
+完成 XRT、ZOCL、FPGA/XMUtil 和 Minimal PYNQ 初始化。
 EOF
 
-tar -C "$RUNTIME_DIR" -czf - . | \
-  ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" \
-    'mkdir -p /tmp/kv260-runtime && tar -xzf - -C /tmp/kv260-runtime'
+"$RUNTIME_INIT_SCRIPT" "$BOARD_ID"
 
-ssh -tt "${SSH_OPTIONS[@]}" "$SSH_TARGET" \
-  'sudo /tmp/kv260-runtime/install_runtime.sh' 2>&1 | tee -a "$LOG_FILE"
-
-printf '[%s] KV260 deployment completed for %s (%s)\n' \
-  "$(date -Is)" "$HOSTNAME" "$IP_ADDRESS" | tee -a "$LOG_FILE"
+cat <<EOF | tee -a "$LOG_FILE"
+========================================
+KV260 Deployment Complete
+========================================
+Board ID: $BOARD_ID
+Board: $HOSTNAME
+IP: $IP_ADDRESS
+XRT: OK
+ZOCL: OK
+PYNQ: OK
+FPGA: OK
+Log: $LOG_FILE
+========================================
+EOF
