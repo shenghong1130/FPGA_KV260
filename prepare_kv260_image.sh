@@ -27,7 +27,7 @@ usage() {
 LAST_OCTET=$((81 + BOARD_ID))
 
 for command in blockdev dd partprobe udevadm lsblk mount umount mountpoint \
-  growpart e2fsck resize2fs blkid curl gpg usermod groupmod chpasswd; do
+  growpart e2fsck resize2fs blkid curl gpg openssl useradd usermod groupmod; do
   command -v "$command" >/dev/null || die "缺少命令: $command"
 done
 
@@ -144,7 +144,19 @@ if grep -q '^kv:' "$ROOT_MNT/etc/passwd"; then
   fi
   sed -i 's/\(^gpio:[^:]*:[^:]*:\).*\bkv\b/\1ubuntu/' "$ROOT_MNT/etc/group"
 fi
-printf 'ubuntu:ubuntu\n' | chpasswd --root "$ROOT_MNT"
+
+# Recent Kria images may not contain a pre-created interactive account.
+# Create ubuntu in that case; older images retain the kv-to-ubuntu migration.
+if ! grep -q '^ubuntu:' "$ROOT_MNT/etc/passwd"; then
+  useradd --root "$ROOT_MNT" --create-home --home-dir /home/ubuntu \
+    --shell /bin/bash --groups sudo ubuntu
+fi
+
+# Do not use `chpasswd --root`: it tries to load PAM modules from the mounted
+# ARM rootfs, which cannot be loaded by this x86 host.  Generate a SHA-512
+# hash locally and update the target shadow database without invoking PAM.
+PASSWORD_HASH=$(openssl passwd -6 ubuntu)
+usermod --root "$ROOT_MNT" --password "$PASSWORD_HASH" ubuntu
 
 # Hostname and passwordless sudo are configured in the image immediately;
 # cloud-init repeats the relevant settings on first boot.
