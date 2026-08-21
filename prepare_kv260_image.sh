@@ -79,7 +79,6 @@ read -r -p "第二次确认：输入 WRITE 以开始覆盖写盘: " write_confir
 
 echo "正在写入镜像..."
 dd if="$IMAGE_PATH" of="$DISK" bs=16M conv=fsync status=progress
-sync
 partprobe "$DISK"
 udevadm settle
 
@@ -103,7 +102,6 @@ BOOT_MNT=$(mktemp -d /tmp/kv260-boot.XXXXXX)
 mounted_root=0
 mounted_boot=0
 cleanup() {
-  sync || true
   if (( mounted_boot )); then umount "$BOOT_MNT" || true; fi
   if (( mounted_root )); then umount "$ROOT_MNT" || true; fi
   rmdir "$BOOT_MNT" "$ROOT_MNT" 2>/dev/null || true
@@ -296,7 +294,6 @@ runcmd:
 EOF
 chmod 0644 "$USER_DATA"
 
-sync
 echo "========================================"
 echo "KV260 Deployment Complete"
 echo "========================================"
