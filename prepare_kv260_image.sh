@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Write and prepare a KV260 Ubuntu image.
-# Usage: sudo ./prepare_kv260_image.sh image.img /dev/sdX 1
+# Write and prepare one KV260 SD card from the shared base image.
+# Usage: sudo ./prepare_kv260_image.sh <image> <device> <board-id>
 
 IMAGE_PATH="${1:-}"
 DISK="${2:-}"
@@ -14,8 +14,13 @@ die() {
 }
 
 usage() {
-  echo "用法: sudo $0 image.img /dev/sdX KV260编号" >&2
-  echo "示例: sudo $0 kv260.img /dev/sdb 1" >&2
+  cat >&2 <<EOF
+用法:
+  sudo $0 <原始镜像> <目标SD卡> <KV260编号>
+
+KV260编号范围为 1-20；所有板卡均从同一个原始 .img 写入。
+编号 N 自动生成 hostname=kv260N、IP=192.168.31.(81+N)。
+EOF
   exit 2
 }
 
@@ -25,6 +30,10 @@ usage() {
 [[ -b "$DISK" ]] || die "目标不是块设备: $DISK"
 [[ "$BOARD_ID" =~ ^([1-9]|1[0-9]|20)$ ]] || die "KV260 板号必须在 1-20 之间: $BOARD_ID"
 LAST_OCTET=$((81 + BOARD_ID))
+IP_ADDRESS="192.168.31.${LAST_OCTET}"
+IP="${IP_ADDRESS}/24"
+HOSTNAME="kv260${BOARD_ID}"
+INSTANCE_ID="kv260${BOARD_ID}"
 
 for command in blockdev dd partprobe udevadm lsblk mount umount mountpoint \
   growpart e2fsck resize2fs blkid curl gpg openssl useradd usermod groupmod; do
@@ -48,11 +57,25 @@ while read -r device mount_path; do
   [[ -z "${mount_path:-}" ]] || die "目标设备或分区已挂载: $device -> $mount_path"
 done < <(lsblk -nrpo NAME,MOUNTPOINT "$DISK" | awk 'NF > 1 {print $1, $2}')
 
-echo "即将覆盖目标设备: $DISK"
-echo "镜像文件: $IMAGE_PATH"
+echo "========================================"
+echo "KV260 Deployment"
+echo "========================================"
+echo "Board ID:"
+echo "  $BOARD_ID"
+echo "Hostname:"
+echo "  $HOSTNAME"
+echo "IP:"
+echo "  $IP_ADDRESS"
+echo "Target:"
+echo "  $DISK"
+echo "Base image:"
+echo "  $IMAGE_PATH"
 echo "目标容量: $((DISK_BYTES / 1024 / 1024)) MiB"
-read -r -p "请输入目标设备路径以确认写盘: " confirmation
+echo "警告：将完整覆盖目标 SD 卡。换卡后必须重新使用 lsblk 确认设备。"
+read -r -p "第一次确认：请输入目标设备路径: " confirmation
 [[ "$confirmation" == "$DISK" ]] || die "确认失败，已取消写盘"
+read -r -p "第二次确认：输入 WRITE 以开始覆盖写盘: " write_confirmation
+[[ "$write_confirmation" == "WRITE" ]] || die "确认失败，已取消写盘"
 
 echo "正在写入镜像..."
 dd if="$IMAGE_PATH" of="$DISK" bs=16M conv=fsync status=progress
@@ -99,24 +122,27 @@ KRIA_PPA='http://ppa.launchpadcontent.net/ubuntu-xilinx/kria/ubuntu/'
 KRIA_PPA_HTTPS='https://ppa.launchpadcontent.net/ubuntu-xilinx/kria/ubuntu/'
 KRIA_KEYRING="$ROOT_MNT/etc/apt/keyrings/ubuntu-xilinx-kria.gpg"
 KRIA_KEY_FINGERPRINT='803DDF595EA7B6644F9B96B752150A179A9E84C9'
-IP="192.168.31.${LAST_OCTET}/24"
-HOSTNAME="kv260${BOARD_ID}"
-INSTANCE_ID="kv260${BOARD_ID}"
 
 NETWORK_CONFIG=$(cat <<EOF
 network:
   version: 2
   renderer: NetworkManager
   ethernets:
-    wired:
+    eth0:
       match:
-        name: "e*"
+        name: "eth0"
       dhcp4: false
+      dhcp6: false
+      optional: true
       addresses:
         - ${IP}
       routes:
         - to: default
           via: 192.168.31.1
+      nameservers:
+        addresses:
+          - 223.5.5.5
+          - 192.168.31.1
 EOF
 )
 
@@ -125,6 +151,15 @@ EOF
 install -d -m 0755 "$ROOT_MNT/var/lib/cloud/seed/nocloud"
 printf '%s\n' "$NETWORK_CONFIG" > "$ROOT_MNT/var/lib/cloud/seed/nocloud/network-config"
 printf '%s\n' "$NETWORK_CONFIG" > "$BOOT_MNT/network-config"
+
+# Netplan is the authoritative persistent static network configuration.
+# Disable cloud-init network rendering so first boot cannot overwrite it.
+install -d -m 0755 "$ROOT_MNT/etc/netplan" "$ROOT_MNT/etc/cloud/cloud.cfg.d"
+printf '%s\n' "$NETWORK_CONFIG" > "$ROOT_MNT/etc/netplan/99-kv260-static.yaml"
+chmod 0600 "$ROOT_MNT/etc/netplan/99-kv260-static.yaml"
+cat > "$ROOT_MNT/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg" <<'EOF'
+network: {config: disabled}
+EOF
 
 cat > "$ROOT_MNT/var/lib/cloud/seed/nocloud/meta-data" <<EOF
 instance-id: ${INSTANCE_ID}
@@ -262,10 +297,13 @@ EOF
 chmod 0644 "$USER_DATA"
 
 sync
-echo "已完成: $DISK"
-echo "镜像: $IMAGE_PATH"
-echo "KV260 编号: $BOARD_ID"
-echo "主机名: $HOSTNAME"
-echo "IP: $IP"
-echo "用户: ubuntu"
-echo "SSH: 已启用密码登录，ubuntu 免密 sudo"
+echo "========================================"
+echo "KV260 Deployment Complete"
+echo "========================================"
+echo "Board ID: $BOARD_ID"
+echo "Hostname: $HOSTNAME"
+echo "IP: $IP_ADDRESS"
+echo "Target: $DISK"
+echo "User: ubuntu"
+echo "SSH: password login enabled; ubuntu has passwordless sudo"
+echo "========================================"
