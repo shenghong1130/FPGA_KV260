@@ -97,7 +97,8 @@ printf '[%s] %s is reachable\n' "$(date -Is)" "$HOSTNAME" | tee -a "$LOG_FILE"
 cat <<EOF
 
 目标已上线。现在调用 runtime_init_kv260.sh，通过 SSH 在 ARM64 KV260 上
-完成 XRT、ZOCL、FPGA/XMUtil 和 Minimal PYNQ 初始化。
+完成 XRT、ZOCL、Minimal PYNQ 和 FPGA Manager 初始化；如果检测到新
+Xilinx kernel，Runtime Factory 会重启目标并自动继续第二阶段。
 EOF
 
 "$RUNTIME_INIT_SCRIPT" "$BOARD_ID"
@@ -109,10 +110,11 @@ KV260 Deployment Complete
 Board ID: $BOARD_ID
 Board: $HOSTNAME
 IP: $IP_ADDRESS
-XRT: OK
-ZOCL: OK
-PYNQ: OK
-FPGA: OK
+System / FPGA Manager: OK
+XRT userspace: OK
+ZOCL Driver: OK
+Minimal PYNQ: OK
+Overlay Hardware Test: see Runtime report
 Log: $LOG_FILE
 ========================================
 EOF

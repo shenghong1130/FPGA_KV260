@@ -1,29 +1,187 @@
 #!/usr/bin/env bash
-# Install the minimal PYNQ Python runtime in an isolated virtual environment.
+# Install and functionally validate the Minimal PYNQ runtime for KV260/Noble.
 set -Eeuo pipefail
 
-[[ $EUID -eq 0 ]] || {
-  echo "请使用 sudo 运行 $0" >&2
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ASSET_DIR="$SCRIPT_DIR/pynq_runtime"
+PYNQ_VENV="${PYNQ_VENV:-/opt/kv260-pynq}"
+PYNQ_SHARE="$PYNQ_VENV/share/kv260-runtime"
+PYNQ_VERSION="${PYNQ_VERSION:-3.1.2}"
+PYNQ_METADATA_VERSION="${PYNQ_METADATA_VERSION:-0.1.9}"
+PYNQ_UTILS_VERSION="${PYNQ_UTILS_VERSION:-0.1.2}"
+NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
+MIN_CMA_MB="${PYNQ_MIN_CMA_MB:-256}"
+OVERLAY_DIR="${PYNQ_OVERLAY_DIR:-/opt/fpga}"
+OVERLAY_NAME="${PYNQ_OVERLAY_NAME:-design}"
+
+die() {
+  printf '%s\n' \
+    "Minimal PYNQ installation failed: $*" \
+    "Kernel: $(uname -r)" \
+    "XRT version: $(dpkg-query -W -f='${Version}' xrt 2>/dev/null || printf 'not installed')" \
+    "PYNQ requested version: $PYNQ_VERSION" >&2
   exit 1
 }
 
-PYNQ_VENV="${PYNQ_VENV:-/opt/kv260-pynq}"
+on_error() {
+  local line="$1"
+  local status="$2"
+  local installed_pynq="not installed"
+  trap - ERR
+  if [[ -x "$PYNQ_VENV/bin/python" ]]; then
+    installed_pynq=$("$PYNQ_VENV/bin/python" -c \
+      'import pynq; print(pynq.__version__)' 2>/dev/null) || installed_pynq="unavailable"
+  fi
+  printf '%s\n' \
+    "Minimal PYNQ unexpected failure at line $line (exit=$status)" \
+    "Kernel: $(uname -r)" \
+    "XRT version: $(dpkg-query -W -f='${Version}' xrt 2>/dev/null || printf 'not installed')" \
+    "PYNQ installed/requested: $installed_pynq / $PYNQ_VERSION" >&2
+  exit "$status"
+}
 
-apt-get update
-apt-get install -y python3-pip python3-venv
+trap 'on_error "$LINENO" "$?"' ERR
 
-if [[ ! -x "$PYNQ_VENV/bin/python" ]]; then
-  python3 -m venv "$PYNQ_VENV"
+[[ $EUID -eq 0 ]] || die "请使用 sudo 运行此脚本"
+[[ $(uname -m) == aarch64 ]] || die "需要 aarch64，当前为 $(uname -m)"
+[[ $(uname -r) == *xilinx* ]] || die "需要 Xilinx kernel"
+[[ -e /sys/class/fpga_manager/fpga0 ]] || die "找不到 /sys/class/fpga_manager/fpga0"
+[[ -d "$ASSET_DIR" ]] || die "找不到 PYNQ runtime assets: $ASSET_DIR"
+[[ "$MIN_CMA_MB" =~ ^[0-9]+$ ]] || die "PYNQ_MIN_CMA_MB 必须是整数"
+
+[[ -r /etc/os-release ]] || die "无法读取 /etc/os-release"
+. /etc/os-release
+[[ "${ID:-}" == ubuntu && "${VERSION_CODENAME:-}" == noble ]] || \
+  die "仅支持 Ubuntu 24.04 Noble；当前系统: ${PRETTY_NAME:-unknown}"
+
+cma_kb=$(awk '/^CmaTotal:/ {print $2}' /proc/meminfo)
+[[ "$cma_kb" =~ ^[0-9]+$ ]] || die "/proc/meminfo 中没有 CmaTotal"
+cma_mb=$((cma_kb / 1024))
+(( cma_mb >= MIN_CMA_MB )) || \
+  die "CMA 过小：${cma_mb} MiB，最低要求 ${MIN_CMA_MB} MiB"
+echo "CMA: OK (${cma_mb} MiB; minimum ${MIN_CMA_MB} MiB)"
+if (( cma_mb < 512 )); then
+  echo "WARNING: CMA 小于 512 MiB；大 buffer/DMA 工作负载可能需要增大 CMA"
 fi
 
-"$PYNQ_VENV/bin/python" -m pip install --upgrade pip
-"$PYNQ_VENV/bin/python" -m pip install \
-  --upgrade --upgrade-strategy only-if-needed --no-build-isolation pynq
+for command in apt-get dpkg-query modprobe systemctl xclbinutil; do
+  command -v "$command" >/dev/null 2>&1 || die "缺少命令: $command"
+done
+dpkg-query -W -f='${Version}' xrt >/dev/null 2>&1 || die "xrt Debian package 未安装"
+
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  build-essential device-tree-compiler libdrm-dev libffi-dev libssl-dev \
+  python3-dev python3-pip python3-venv
+
+system_python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+[[ "$system_python_version" == 3.12 ]] || \
+  die "Noble Runtime 需要已验证的 Python 3.12，当前为 $system_python_version"
+
+if [[ ! -x "$PYNQ_VENV/bin/python" ]]; then
+  echo "Creating PYNQ virtual environment: $PYNQ_VENV"
+  python3 -m venv --system-site-packages "$PYNQ_VENV"
+else
+  venv_python_version=$("$PYNQ_VENV/bin/python" -c \
+    'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  [[ "$venv_python_version" == "$system_python_version" ]] || \
+    die "现有 venv Python=$venv_python_version，与系统 Python=$system_python_version 不一致"
+  # XRT's pyxrt is delivered by the Debian package in dist-packages.
+  sed -i 's/^include-system-site-packages = false$/include-system-site-packages = true/' \
+    "$PYNQ_VENV/pyvenv.cfg"
+  echo "Reusing PYNQ virtual environment: $PYNQ_VENV"
+fi
+
+export BOARD=KV260
+export XILINX_XRT=/usr
+export PYNQ_JUPYTER_NOTEBOOKS=
+
+"$PYNQ_VENV/bin/python" -c 'import pyxrt' || \
+  die "venv 无法 import pyxrt；确认 xrt package 与 --system-site-packages"
+
+"$PYNQ_VENV/bin/python" -m pip install --upgrade pip setuptools wheel
+"$PYNQ_VENV/bin/python" -m pip install --upgrade --upgrade-strategy only-if-needed \
+  "numpy==$NUMPY_VERSION" \
+  "pynqmetadata==$PYNQ_METADATA_VERSION" \
+  "pynqutils==$PYNQ_UTILS_VERSION"
+BOARD=KV260 XILINX_XRT=/usr \
+  "$PYNQ_VENV/bin/python" -m pip install \
+    --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
+    "pynq==$PYNQ_VERSION"
+"$PYNQ_VENV/bin/python" -m pip check
+
+install -d -m 0755 "$PYNQ_SHARE"
+install -m 0644 "$ASSET_DIR/pynq.dts" "$PYNQ_SHARE/pynq.dts"
+install -m 0755 "$ASSET_DIR/insert_dtbo.py" "$PYNQ_SHARE/insert_dtbo.py"
+install -m 0755 "$ASSET_DIR/clear_pl_state.py" "$PYNQ_SHARE/clear_pl_state.py"
+install -m 0755 "$ASSET_DIR/validate_runtime.py" "$PYNQ_SHARE/validate_runtime.py"
+dtc -@ -I dts -O dtb -o "$PYNQ_SHARE/pynq.dtbo" "$PYNQ_SHARE/pynq.dts"
+
+# Retained for XRT/Kria platform compatibility. PYNQ 3.1.2 itself selects the
+# EmbeddedDevice through XILINX_XRT and FPGA Manager rather than reading this.
+printf 'KV260\n' > /etc/xocl.txt
+chmod 0644 /etc/xocl.txt
 
 cat > /etc/profile.d/kv260-pynq.sh <<EOF
 export KV260_PYNQ_VENV="$PYNQ_VENV"
+export BOARD="KV260"
+export XILINX_XRT="/usr"
 export PATH="\$KV260_PYNQ_VENV/bin:\$PATH"
 EOF
 chmod 0644 /etc/profile.d/kv260-pynq.sh
 
-"$PYNQ_VENV/bin/python" -c 'from pynq import MMIO, Overlay, allocate; print("PYNQ minimal runtime: OK")'
+cat > /etc/systemd/system/kv260-pynq-dt.service <<EOF
+[Unit]
+Description=Insert the KV260 Minimal PYNQ device-tree runtime
+Requires=sys-kernel-config.mount
+After=sys-kernel-config.mount systemd-modules-load.service
+Before=kv260-pynq-clear-pl-state.service
+
+[Service]
+Type=oneshot
+Environment=BOARD=KV260
+Environment=XILINX_XRT=/usr
+ExecStartPre=/sbin/modprobe zocl
+ExecStart=$PYNQ_VENV/bin/python $PYNQ_SHARE/insert_dtbo.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/kv260-pynq-clear-pl-state.service <<EOF
+[Unit]
+Description=Clear stale PYNQ PL state before the worker loads its overlay
+Requires=kv260-pynq-dt.service
+After=kv260-pynq-dt.service
+
+[Service]
+Type=oneshot
+Environment=BOARD=KV260
+Environment=XILINX_XRT=/usr
+ExecStart=$PYNQ_VENV/bin/python $PYNQ_SHARE/clear_pl_state.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable kv260-pynq-dt.service kv260-pynq-clear-pl-state.service
+systemctl restart kv260-pynq-dt.service kv260-pynq-clear-pl-state.service
+systemctl is-active --quiet kv260-pynq-dt.service || \
+  die "kv260-pynq-dt.service 未处于 active 状态"
+
+bit_path="$OVERLAY_DIR/${OVERLAY_NAME}.bit"
+hwh_path="$OVERLAY_DIR/${OVERLAY_NAME}.hwh"
+validation_args=()
+if [[ -f "$bit_path" && -f "$hwh_path" ]]; then
+  validation_args=(--bit "$bit_path")
+elif [[ -e "$bit_path" || -e "$hwh_path" ]]; then
+  die "Overlay 文件不完整；必须同时提供 $bit_path 和 $hwh_path"
+fi
+
+BOARD=KV260 XILINX_XRT=/usr \
+  "$PYNQ_VENV/bin/python" "$PYNQ_SHARE/validate_runtime.py" "${validation_args[@]}"
+
+echo "Minimal Kria-PYNQ Runtime Installation: OK"

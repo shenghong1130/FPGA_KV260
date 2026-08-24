@@ -11,12 +11,17 @@ echo "FPGA Manager:"
 ls -l /sys/class/fpga_manager/
 
 command -v xmutil >/dev/null || {
-  echo "XMUtil check: FAIL (xmutil is not installed)" >&2
-  exit 1
+  echo "WARNING: xmutil is not installed (optional platform diagnostic)"
+  echo "FPGA Manager check: OK"
+  exit 0
 }
 
 echo "XMUtil applications:"
-xmutil listapps
+if ! xmutil listapps; then
+  echo "WARNING: xmutil listapps failed (optional platform diagnostic)"
+fi
 echo "XMUtil examine:"
-xmutil examine
-echo "FPGA/XMUtil check: OK"
+if ! xmutil examine; then
+  echo "WARNING: xmutil examine failed (optional platform diagnostic)"
+fi
+echo "FPGA Manager check: OK"

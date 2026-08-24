@@ -1,0 +1,20 @@
+// Copyright (C) 2021 Xilinx, Inc.
+// SPDX-License-Identifier: BSD-3-Clause
+// Minimal KV260 PYNQ runtime overlay, adapted from Xilinx/Kria-PYNQ.
+// The legacy AFI and fixed-address generic-uio fragments are intentionally
+// omitted: PYNQ 3.1.2 configures AXI widths itself and custom IP comes from
+// the user's matching design.bit/design.hwh metadata.
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target = <&amba>;
+		__overlay__ {
+			pynq_zocl: zyxclmm_drm {
+				compatible = "xlnx,zocl";
+				status = "okay";
+			};
+		};
+	};
+};
