@@ -31,11 +31,16 @@ diagnostic() {
 
 has_zocl_dt_node() {
   local compatible
+  local dt_root
+
+  dt_root=$(readlink -f /proc/device-tree) || return 1
+  [[ -d "$dt_root" ]] || return 1
+
   while IFS= read -r -d '' compatible; do
     if grep -azFxq 'xlnx,zocl' "$compatible"; then
       return 0
     fi
-  done < <(find /proc/device-tree -type f -name compatible -print0 2>/dev/null)
+  done < <(find "$dt_root" -type f -name compatible -print0 2>/dev/null)
   return 1
 }
 
@@ -149,11 +154,24 @@ else
   required "pyxrt" "FAIL" "$PYNQ_VENV/bin/python is unavailable"
 fi
 
-if has_zocl_dt_node && has_pynq_board_marker \
-  && systemctl is-active --quiet kv260-pynq-dt.service; then
+zocl_dt=FAIL
+pynq_board=FAIL
+dt_service=FAIL
+if has_zocl_dt_node; then
+  zocl_dt=OK
+fi
+if has_pynq_board_marker; then
+  pynq_board=OK
+fi
+if systemctl is-active --quiet kv260-pynq-dt.service; then
+  dt_service=OK
+fi
+
+if [[ "$zocl_dt" == OK && "$pynq_board" == OK && "$dt_service" == OK ]]; then
   required "PYNQ DT/runtime" "OK" "xlnx,zocl live; pynq_board=KV260; service active"
 else
-  required "PYNQ DT/runtime" "FAIL" "xlnx,zocl, pynq_board=KV260, or service is unavailable"
+  required "PYNQ DT/runtime" "FAIL" \
+    "zocl=$zocl_dt pynq_board=$pynq_board service=$dt_service"
 fi
 
 if [[ -e /dev/dri/renderD128 ]]; then

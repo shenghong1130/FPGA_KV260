@@ -166,10 +166,10 @@ if venv not in site_packages.parents:
 
 for name, expected in expected_versions.items():
     module = importlib.import_module(name)
-    actual = getattr(module, "__version__", "unknown")
     module_path = pathlib.Path(module.__file__).resolve()
     if site_packages not in module_path.parents:
         raise RuntimeError(f"{name} loaded outside venv: {module_path}")
+    actual = importlib.metadata.version(name)
     if actual != expected:
         raise RuntimeError(f"{name} version mismatch: expected={expected} actual={actual}")
     print(f"{name} {actual}: {module_path}")
