@@ -31,10 +31,10 @@ trap 'on_error "$LINENO" "$?"' ERR
 
 validate_pyxrt() {
   local interpreter="$1"
-  "$interpreter" - <<'PY'
+  PYXRT_EXPECTED_PLATLIB="$SYSTEM_LOCAL_PLATLIB" "$interpreter" - <<'PY'
+import os
 import pathlib
 import sys
-import sysconfig
 
 if sys.version_info[:2] != (3, 12):
     raise RuntimeError(f"pyxrt requires Python 3.12, got {sys.version.split()[0]}")
@@ -46,13 +46,11 @@ if missing:
     raise RuntimeError(f"pyxrt basic API missing: {', '.join(missing)}")
 
 path = pathlib.Path(pyxrt.__file__).resolve()
-local_platlib = pathlib.Path(
-    sysconfig.get_path("platlib", scheme="posix_local")
-).resolve()
-if local_platlib not in path.parents:
+expected = pathlib.Path(os.environ["PYXRT_EXPECTED_PLATLIB"]).resolve()
+if expected not in path.parents:
     raise RuntimeError(
-        f"pyxrt must be installed from matching XRT source under "
-        f"{local_platlib}, got {path}"
+        f"pyxrt must be installed under system local platlib "
+        f"{expected}, got {path}"
     )
 print(f"Python version: {sys.version.split()[0]}")
 print(f"pyxrt path: {path}")
@@ -79,6 +77,10 @@ validate_existing_install() {
 python_version=$(python3 -c \
   'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 [[ "$python_version" == 3.12 ]] || die "仅支持 Python 3.12，当前为 $python_version"
+SYSTEM_LOCAL_PLATLIB=$(python3 -c \
+  'import sysconfig; print(sysconfig.get_path("platlib", scheme="posix_local"))')
+[[ "$SYSTEM_LOCAL_PLATLIB" == /usr/local/*/python3.12/dist-packages ]] || \
+  die "unexpected system Python posix_local platlib: $SYSTEM_LOCAL_PLATLIB"
 
 if validate_existing_install; then
   echo "pyxrt: already available"
@@ -167,10 +169,7 @@ extension_suffix=$(python3-config --extension-suffix)
 [[ -n "$extension_suffix" ]] || die "python3-config 未返回 extension suffix"
 PYXRT_OUTPUT="$build_dir/pyxrt${extension_suffix}"
 
-python_dist_packages=$(python3 -c \
-  'import sysconfig; print(sysconfig.get_path("platlib", scheme="posix_local"))')
-[[ "$python_dist_packages" == /usr/local/*/python3.12/dist-packages ]] || \
-  die "unexpected Python posix_local platlib: $python_dist_packages"
+python_dist_packages="$SYSTEM_LOCAL_PLATLIB"
 
 echo "Building pyxrt from: $source_cpp"
 read -r -a python_include_flags <<<"$(python3-config --includes)"

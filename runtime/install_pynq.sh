@@ -80,6 +80,10 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 system_python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 [[ "$system_python_version" == 3.12 ]] || \
   die "Noble Runtime 需要已验证的 Python 3.12，当前为 $system_python_version"
+SYSTEM_LOCAL_PLATLIB=$(python3 -c \
+  'import sysconfig; print(sysconfig.get_path("platlib", scheme="posix_local"))')
+[[ "$SYSTEM_LOCAL_PLATLIB" == /usr/local/*/python3.12/dist-packages ]] || \
+  die "unexpected system Python posix_local platlib: $SYSTEM_LOCAL_PLATLIB"
 
 if [[ ! -x "$PYNQ_VENV/bin/python" ]]; then
   echo "Creating PYNQ virtual environment: $PYNQ_VENV"
@@ -102,21 +106,24 @@ export PYNQ_JUPYTER_NOTEBOOKS=
 export PYTHONNOUSERSITE=1
 export PIP_USER=0
 
-"$PYNQ_VENV/bin/python" - <<'PY' || \
+PYXRT_EXPECTED_PLATLIB="$SYSTEM_LOCAL_PLATLIB" \
+  "$PYNQ_VENV/bin/python" - <<'PY' || \
   die "pyxrt missing; run install_pyxrt.sh first"
-import pyxrt
+import os
 import pathlib
-import sysconfig
+
+import pyxrt
 
 missing = [name for name in ("device", "bo", "kernel") if not hasattr(pyxrt, name)]
 if missing:
     raise RuntimeError(f"pyxrt basic API missing: {', '.join(missing)}")
 path = pathlib.Path(pyxrt.__file__).resolve()
-local_platlib = pathlib.Path(
-    sysconfig.get_path("platlib", scheme="posix_local")
-).resolve()
-if local_platlib not in path.parents:
-    raise RuntimeError(f"unexpected pyxrt path: {path}; expected under {local_platlib}")
+expected = pathlib.Path(os.environ["PYXRT_EXPECTED_PLATLIB"]).resolve()
+if expected not in path.parents:
+    raise RuntimeError(
+        f"unexpected pyxrt path: {path}; "
+        f"expected under system local platlib {expected}"
+    )
 print(f"pyxrt: OK ({path})")
 PY
 
