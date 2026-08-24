@@ -13,10 +13,13 @@ xrt_version=$(dpkg-query -W -f='${Version}' xrt 2>/dev/null) || {
 }
 echo "XRT userspace package: OK ($xrt_version)"
 
+xrt_tmp=$(mktemp)
+trap 'rm -f "$xrt_tmp"' EXIT
 set +e
-xrt_output=$(xrt-smi examine 2>&1)
-xrt_rc=$?
+xrt-smi examine 2>&1 | tr -d '\0' > "$xrt_tmp"
+xrt_rc=${PIPESTATUS[0]}
 set -e
+xrt_output=$(<"$xrt_tmp")
 printf '%s\n' "$xrt_output"
 
 if (( xrt_rc != 0 )); then

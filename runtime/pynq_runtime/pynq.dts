@@ -17,4 +17,13 @@
 			};
 		};
 	};
+
+	// PYNQ 3.1.2 uses this marker to select its on-target EmbeddedDevice
+	// implementation.  It is independent of the user's design.bit/design.hwh.
+	fragment@1 {
+		target-path = "/chosen";
+		__overlay__ {
+			pynq_board = "KV260";
+		};
+	};
 };

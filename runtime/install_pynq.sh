@@ -10,6 +10,7 @@ PYNQ_VERSION="${PYNQ_VERSION:-3.1.2}"
 PYNQ_METADATA_VERSION="${PYNQ_METADATA_VERSION:-0.1.9}"
 PYNQ_UTILS_VERSION="${PYNQ_UTILS_VERSION:-0.1.2}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
+SETUPTOOLS_VERSION="80.0.0"
 MIN_CMA_MB="${PYNQ_MIN_CMA_MB:-256}"
 OVERLAY_DIR="${PYNQ_OVERLAY_DIR:-/opt/fpga}"
 OVERLAY_NAME="${PYNQ_OVERLAY_NAME:-design}"
@@ -50,6 +51,8 @@ trap 'on_error "$LINENO" "$?"' ERR
 [[ "$MIN_CMA_MB" =~ ^[0-9]+$ ]] || die "PYNQ_MIN_CMA_MB 必须是整数"
 
 [[ -r /etc/os-release ]] || die "无法读取 /etc/os-release"
+# Fixed OS metadata path, validated above.
+# shellcheck disable=SC1091
 . /etc/os-release
 [[ "${ID:-}" == ubuntu && "${VERSION_CODENAME:-}" == noble ]] || \
   die "仅支持 Ubuntu 24.04 Noble；当前系统: ${PRETTY_NAME:-unknown}"
@@ -86,7 +89,8 @@ else
     'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
   [[ "$venv_python_version" == "$system_python_version" ]] || \
     die "现有 venv Python=$venv_python_version，与系统 Python=$system_python_version 不一致"
-  # XRT's pyxrt is delivered by the Debian package in dist-packages.
+  # pyxrt is installed separately in /usr/local by install_pyxrt.sh.  Keep
+  # system-site-packages enabled so the venv can load that matching binding.
   sed -i 's/^include-system-site-packages = false$/include-system-site-packages = true/' \
     "$PYNQ_VENV/pyvenv.cfg"
   echo "Reusing PYNQ virtual environment: $PYNQ_VENV"
@@ -95,20 +99,90 @@ fi
 export BOARD=KV260
 export XILINX_XRT=/usr
 export PYNQ_JUPYTER_NOTEBOOKS=
+export PYTHONNOUSERSITE=1
+export PIP_USER=0
 
-"$PYNQ_VENV/bin/python" -c 'import pyxrt' || \
-  die "venv 无法 import pyxrt；确认 xrt package 与 --system-site-packages"
+"$PYNQ_VENV/bin/python" - <<'PY' || \
+  die "pyxrt missing; run install_pyxrt.sh first"
+import pyxrt
+import pathlib
+import sysconfig
 
-"$PYNQ_VENV/bin/python" -m pip install --upgrade pip setuptools wheel
-"$PYNQ_VENV/bin/python" -m pip install --upgrade --upgrade-strategy only-if-needed \
+missing = [name for name in ("device", "bo", "kernel") if not hasattr(pyxrt, name)]
+if missing:
+    raise RuntimeError(f"pyxrt basic API missing: {', '.join(missing)}")
+path = pathlib.Path(pyxrt.__file__).resolve()
+local_platlib = pathlib.Path(
+    sysconfig.get_path("platlib", scheme="posix_local")
+).resolve()
+if local_platlib not in path.parents:
+    raise RuntimeError(f"unexpected pyxrt path: {path}; expected under {local_platlib}")
+print(f"pyxrt: OK ({path})")
+PY
+
+"$PYNQ_VENV/bin/python" -m pip install --upgrade \
+  pip wheel "setuptools==$SETUPTOOLS_VERSION"
+"$PYNQ_VENV/bin/python" -m pip install --ignore-installed \
   "numpy==$NUMPY_VERSION" \
   "pynqmetadata==$PYNQ_METADATA_VERSION" \
-  "pynqutils==$PYNQ_UTILS_VERSION"
-BOARD=KV260 XILINX_XRT=/usr \
+  "pynqutils==$PYNQ_UTILS_VERSION" \
+  "grpcio==1.64.0" \
+  "grpcio-tools==1.64.0" \
+  nest_asyncio
+
+# PYNQ_REMOTE is only a PYNQ setup.py build switch.  It skips optional native
+# HDMI/DisplayPort/audio/PCam extensions on aarch64; this KV260 still runs the
+# normal on-target EmbeddedDevice path, not PYNQ RemoteDevice.
+PYNQ_REMOTE=1 BOARD=KV260 XILINX_XRT=/usr \
   "$PYNQ_VENV/bin/python" -m pip install \
-    --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
+    --upgrade --upgrade-strategy only-if-needed --no-build-isolation --no-cache-dir \
     "pynq==$PYNQ_VERSION"
 "$PYNQ_VENV/bin/python" -m pip check
+
+"$PYNQ_VENV/bin/python" - "$PYNQ_VENV" "$PYNQ_VERSION" \
+  "$PYNQ_METADATA_VERSION" "$PYNQ_UTILS_VERSION" <<'PY'
+import importlib
+import importlib.metadata
+import pathlib
+import sys
+import sysconfig
+
+venv = pathlib.Path(sys.argv[1]).resolve()
+expected_versions = {
+    "pynq": sys.argv[2],
+    "pynqmetadata": sys.argv[3],
+    "pynqutils": sys.argv[4],
+}
+site_packages = pathlib.Path(sysconfig.get_path("purelib")).resolve()
+if venv not in site_packages.parents:
+    raise RuntimeError(f"venv site-packages is outside {venv}: {site_packages}")
+
+for name, expected in expected_versions.items():
+    module = importlib.import_module(name)
+    actual = getattr(module, "__version__", "unknown")
+    module_path = pathlib.Path(module.__file__).resolve()
+    if site_packages not in module_path.parents:
+        raise RuntimeError(f"{name} loaded outside venv: {module_path}")
+    if actual != expected:
+        raise RuntimeError(f"{name} version mismatch: expected={expected} actual={actual}")
+    print(f"{name} {actual}: {module_path}")
+
+for name in ("grpc", "grpc_tools", "nest_asyncio"):
+    module_path = pathlib.Path(importlib.import_module(name).__file__).resolve()
+    if site_packages not in module_path.parents:
+        raise RuntimeError(f"{name} loaded outside venv: {module_path}")
+
+for distribution, expected in (
+    ("setuptools", "80.0.0"),
+    ("grpcio", "1.64.0"),
+    ("grpcio-tools", "1.64.0"),
+):
+    actual = importlib.metadata.version(distribution)
+    if actual != expected:
+        raise RuntimeError(
+            f"{distribution} version mismatch: expected={expected} actual={actual}"
+        )
+PY
 
 install -d -m 0755 "$PYNQ_SHARE"
 install -m 0644 "$ASSET_DIR/pynq.dts" "$PYNQ_SHARE/pynq.dts"
@@ -168,6 +242,12 @@ EOF
 
 systemctl daemon-reload
 systemctl enable kv260-pynq-dt.service kv260-pynq-clear-pl-state.service
+
+if [[ "${PYNQ_DEFER_ACTIVATION:-0}" == 1 ]]; then
+  echo "Minimal PYNQ packages and runtime assets: OK"
+  exit 0
+fi
+
 systemctl restart kv260-pynq-dt.service kv260-pynq-clear-pl-state.service
 systemctl is-active --quiet kv260-pynq-dt.service || \
   die "kv260-pynq-dt.service 未处于 active 状态"

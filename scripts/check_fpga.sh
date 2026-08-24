@@ -20,8 +20,16 @@ echo "XMUtil applications:"
 if ! xmutil listapps; then
   echo "WARNING: xmutil listapps failed (optional platform diagnostic)"
 fi
-echo "XMUtil examine:"
-if ! xmutil examine; then
-  echo "WARNING: xmutil examine failed (optional platform diagnostic)"
+
+set +e
+xmutil_help=$(xmutil --help 2>&1)
+set -e
+if grep -Eq '(^|[[:space:],])examine([[:space:],]|$)' <<<"$xmutil_help"; then
+  echo "XMUtil examine:"
+  if ! xmutil examine; then
+    echo "WARNING: xmutil examine failed (optional platform diagnostic)"
+  fi
+else
+  echo "XMUtil examine: NOT SUPPORTED (diagnostic only)"
 fi
 echo "FPGA Manager check: OK"

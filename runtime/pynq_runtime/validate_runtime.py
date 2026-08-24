@@ -10,6 +10,7 @@ import pynqmetadata
 import pynqutils
 from pynq import MMIO, Overlay, allocate
 from pynq.pl_server import Device
+from pynq.ps import ON_TARGET
 
 
 def package_version(module) -> str:
@@ -23,8 +24,14 @@ args = parser.parse_args()
 print(f"PYNQ version: {package_version(pynq)}")
 print(f"pynqmetadata version: {package_version(pynqmetadata)}")
 print(f"pynqutils version: {package_version(pynqutils)}")
+print(f"PYNQ ON_TARGET: {ON_TARGET}")
 print("Overlay import: OK")
 print("MMIO import: OK")
+
+if not ON_TARGET:
+    raise RuntimeError(
+        "PYNQ target marker missing: /proc/device-tree/chosen/pynq_board"
+    )
 
 overlay = None
 if args.bit is not None:
@@ -37,6 +44,12 @@ if args.bit is not None:
     print(f"IP dictionary: {overlay.ip_dict}")
 
 device = Device.active_device
+device_type = type(device).__name__
+print(f"Device: {device_type}")
+if device_type != "EmbeddedDevice":
+    raise RuntimeError(
+        f"PYNQ active device must be EmbeddedDevice on KV260, got {device_type}"
+    )
 try:
     buffer = allocate(shape=(1024,), dtype=np.uint32)
     allocation_mode = "overlay/default memory"

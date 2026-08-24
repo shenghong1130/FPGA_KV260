@@ -146,7 +146,9 @@ IP: $IP_ADDRESS
 System / FPGA Manager: OK
 XRT userspace: OK
 ZOCL Driver: OK
-Minimal PYNQ: OK
+pyxrt: OK
+PYNQ version: 3.1.2
+Minimal PYNQ Runtime: OK
 Overlay Hardware Test: see Runtime report (NOT RUN when design files are unavailable)
 Log: $LOG_FILE
 ========================================

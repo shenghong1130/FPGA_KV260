@@ -39,6 +39,11 @@ has_zocl_dt_node() {
   return 1
 }
 
+has_pynq_board_marker() {
+  local marker=/proc/device-tree/chosen/pynq_board
+  [[ -r "$marker" ]] && [[ "$(tr -d '\0' < "$marker")" == KV260 ]]
+}
+
 section "KV260 Minimal PYNQ Runtime Check"
 
 hostname_value=$(hostname)
@@ -62,7 +67,10 @@ else
   required "Network" "FAIL" "IPv4: ${ip_addresses:-none}; default: ${default_route:-none}"
 fi
 
+# /etc/os-release is the fixed system metadata path.
+# shellcheck disable=SC1091
 os_name=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-unknown}")
+# shellcheck disable=SC1091
 os_codename=$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-unknown}")
 if [[ "$os_name" == Ubuntu* && "$os_codename" == noble ]]; then
   required "System" "OK" "$os_name ($os_codename)"
@@ -71,14 +79,18 @@ else
 fi
 
 kernel=$(uname -r)
-[[ "$kernel" == *xilinx* ]] \
-  && required "Xilinx Kernel" "OK" "$kernel" \
-  || required "Xilinx Kernel" "FAIL" "$kernel"
+if [[ "$kernel" == *xilinx* ]]; then
+  required "Xilinx Kernel" "OK" "$kernel"
+else
+  required "Xilinx Kernel" "FAIL" "$kernel"
+fi
 
 architecture=$(uname -m)
-[[ "$architecture" == aarch64 ]] \
-  && required "Architecture" "OK" "$architecture" \
-  || required "Architecture" "FAIL" "$architecture"
+if [[ "$architecture" == aarch64 ]]; then
+  required "Architecture" "OK" "$architecture"
+else
+  required "Architecture" "FAIL" "$architecture"
+fi
 
 cma_kb=$(awk '/^CmaTotal:/ {print $2}' /proc/meminfo)
 if [[ "$cma_kb" =~ ^[0-9]+$ ]] && (( cma_kb >= MIN_CMA_MB * 1024 )); then
@@ -91,9 +103,11 @@ fpga_state=""
 if [[ -r /sys/class/fpga_manager/fpga0/state ]]; then
   fpga_state=$(< /sys/class/fpga_manager/fpga0/state)
 fi
-[[ "$fpga_state" == operating ]] \
-  && required "FPGA Manager" "OK" "fpga0 state=$fpga_state" \
-  || required "FPGA Manager" "FAIL" "fpga0 state=${fpga_state:-unavailable}"
+if [[ "$fpga_state" == operating ]]; then
+  required "FPGA Manager" "OK" "fpga0 state=$fpga_state"
+else
+  required "FPGA Manager" "FAIL" "fpga0 state=${fpga_state:-unavailable}"
+fi
 
 if ! xrt_version=$(dpkg-query -W -f='${Version}' xrt 2>/dev/null); then
   xrt_version=""
@@ -117,11 +131,29 @@ else
   required "ZOCL Driver" "FAIL" "module=${module_path:-none}; loaded=$(grep -q '^zocl ' /proc/modules && echo yes || echo no)"
 fi
 
-if has_zocl_dt_node \
-  && systemctl is-active --quiet kv260-pynq-dt.service; then
-  required "PYNQ DT/runtime" "OK" "xlnx,zocl live; kv260-pynq-dt.service active"
+if [[ -x "$PYNQ_VENV/bin/python" ]]; then
+  set +e
+  pyxrt_path=$(
+    "$PYNQ_VENV/bin/python" -c \
+      'import pyxrt; assert all(hasattr(pyxrt, n) for n in ("device", "bo", "kernel")); print(pyxrt.__file__)' \
+      2>/dev/null
+  )
+  pyxrt_rc=$?
+  set -e
+  if (( pyxrt_rc == 0 )); then
+    required "pyxrt" "OK" "$pyxrt_path"
+  else
+    required "pyxrt" "FAIL" "venv import/API validation failed"
+  fi
 else
-  required "PYNQ DT/runtime" "FAIL" "xlnx,zocl or kv260-pynq-dt.service is unavailable"
+  required "pyxrt" "FAIL" "$PYNQ_VENV/bin/python is unavailable"
+fi
+
+if has_zocl_dt_node && has_pynq_board_marker \
+  && systemctl is-active --quiet kv260-pynq-dt.service; then
+  required "PYNQ DT/runtime" "OK" "xlnx,zocl live; pynq_board=KV260; service active"
+else
+  required "PYNQ DT/runtime" "FAIL" "xlnx,zocl, pynq_board=KV260, or service is unavailable"
 fi
 
 if [[ -e /dev/dri/renderD128 ]]; then
@@ -131,10 +163,13 @@ else
 fi
 
 if command -v xrt-smi >/dev/null 2>&1; then
+  xrt_tmp=$(mktemp)
   set +e
-  xrt_summary=$(xrt-smi examine 2>&1)
-  xrt_rc=$?
+  xrt-smi examine 2>&1 | tr -d '\0' > "$xrt_tmp"
+  xrt_rc=${PIPESTATUS[0]}
   set -e
+  xrt_summary=$(<"$xrt_tmp")
+  rm -f "$xrt_tmp"
   diagnostic "xrt-smi" "exit=$xrt_rc; $(printf '%s' "$xrt_summary" | head -n 1)"
 else
   diagnostic "xrt-smi" "not installed"
