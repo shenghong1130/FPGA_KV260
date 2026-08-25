@@ -1,0 +1,22 @@
+[
+  {"board": "mock-kv2601", "base_url": "http://127.0.0.1:18081"},
+  {"board": "mock-kv2602", "base_url": "http://127.0.0.1:18082"},
+  {"board": "mock-kv2603", "base_url": "http://127.0.0.1:18083"},
+  {"board": "mock-kv2604", "base_url": "http://127.0.0.1:18084"},
+  {"board": "mock-kv2605", "base_url": "http://127.0.0.1:18085"},
+  {"board": "mock-kv2606", "base_url": "http://127.0.0.1:18086"},
+  {"board": "mock-kv2607", "base_url": "http://127.0.0.1:18087"},
+  {"board": "mock-kv2608", "base_url": "http://127.0.0.1:18088"},
+  {"board": "mock-kv2609", "base_url": "http://127.0.0.1:18089"},
+  {"board": "mock-kv26010", "base_url": "http://127.0.0.1:18090"},
+  {"board": "mock-kv26011", "base_url": "http://127.0.0.1:18091"},
+  {"board": "mock-kv26012", "base_url": "http://127.0.0.1:18092"},
+  {"board": "mock-kv26013", "base_url": "http://127.0.0.1:18093"},
+  {"board": "mock-kv26014", "base_url": "http://127.0.0.1:18094"},
+  {"board": "mock-kv26015", "base_url": "http://127.0.0.1:18095"},
+  {"board": "mock-kv26016", "base_url": "http://127.0.0.1:18096"},
+  {"board": "mock-kv26017", "base_url": "http://127.0.0.1:18097"},
+  {"board": "mock-kv26018", "base_url": "http://127.0.0.1:18098"},
+  {"board": "mock-kv26019", "base_url": "http://127.0.0.1:18099"},
+  {"board": "mock-kv26020", "base_url": "http://127.0.0.1:18100"}
+]
