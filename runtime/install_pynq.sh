@@ -10,6 +10,7 @@ PYNQ_VERSION="${PYNQ_VERSION:-3.1.2}"
 PYNQ_METADATA_VERSION="${PYNQ_METADATA_VERSION:-0.1.9}"
 PYNQ_UTILS_VERSION="${PYNQ_UTILS_VERSION:-0.1.2}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
+PYCPARSER_VERSION="${PYCPARSER_VERSION:-2.22}"
 SETUPTOOLS_VERSION="80.0.0"
 MIN_CMA_MB="${PYNQ_MIN_CMA_MB:-256}"
 OVERLAY_DIR="${PYNQ_OVERLAY_DIR:-/opt/fpga}"
@@ -133,6 +134,7 @@ PY
   "numpy==$NUMPY_VERSION" \
   "pynqmetadata==$PYNQ_METADATA_VERSION" \
   "pynqutils==$PYNQ_UTILS_VERSION" \
+  "pycparser==$PYCPARSER_VERSION" \
   "grpcio==1.64.0" \
   "grpcio-tools==1.64.0" \
   nest_asyncio
@@ -143,11 +145,12 @@ PY
 PYNQ_REMOTE=1 BOARD=KV260 XILINX_XRT=/usr \
   "$PYNQ_VENV/bin/python" -m pip install \
     --upgrade --upgrade-strategy only-if-needed --no-build-isolation --no-cache-dir \
-    "pynq==$PYNQ_VERSION"
+    "pynq==$PYNQ_VERSION" \
+    "pycparser==$PYCPARSER_VERSION"
 "$PYNQ_VENV/bin/python" -m pip check
 
 "$PYNQ_VENV/bin/python" - "$PYNQ_VENV" "$PYNQ_VERSION" \
-  "$PYNQ_METADATA_VERSION" "$PYNQ_UTILS_VERSION" <<'PY'
+  "$PYNQ_METADATA_VERSION" "$PYNQ_UTILS_VERSION" "$PYCPARSER_VERSION" <<'PY'
 import importlib
 import importlib.metadata
 import pathlib
@@ -159,6 +162,7 @@ expected_versions = {
     "pynq": sys.argv[2],
     "pynqmetadata": sys.argv[3],
     "pynqutils": sys.argv[4],
+    "pycparser": sys.argv[5],
 }
 site_packages = pathlib.Path(sysconfig.get_path("purelib")).resolve()
 if venv not in site_packages.parents:
@@ -173,6 +177,11 @@ for name, expected in expected_versions.items():
     if actual != expected:
         raise RuntimeError(f"{name} version mismatch: expected={expected} actual={actual}")
     print(f"{name} {actual}: {module_path}")
+
+# PYNQ 3.1.2 imports this module while registering its drivers.  Distribution
+# metadata and `pip check` alone cannot detect its removal in pycparser 3.0.
+importlib.import_module("pycparser.plyparser")
+print("pycparser.plyparser: OK")
 
 for name in ("grpc", "grpc_tools", "nest_asyncio"):
     module_path = pathlib.Path(importlib.import_module(name).__file__).resolve()

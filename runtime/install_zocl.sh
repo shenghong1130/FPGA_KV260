@@ -25,9 +25,18 @@ trap 'on_error "$LINENO" "$?"' ERR
 
 [[ $EUID -eq 0 ]] || die "请使用 sudo 运行此脚本"
 
-for command in apt-cache apt-get dkms dpkg-query find modprobe depmod; do
+for command in apt-cache apt-get dpkg-query find modprobe depmod; do
   command -v "$command" >/dev/null 2>&1 || die "缺少命令: $command"
 done
+
+if ! command -v dkms >/dev/null 2>&1; then
+  echo "DKMS is missing; installing dkms..."
+  apt-get update || die "无法更新 APT package index；不能自动安装 dkms"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y dkms || \
+    die "无法自动安装 dkms"
+fi
+command -v dkms >/dev/null 2>&1 || \
+  die "dkms 安装后仍找不到 dkms 命令"
 
 kernel=$(uname -r)
 architecture=$(uname -m)
