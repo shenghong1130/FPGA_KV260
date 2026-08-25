@@ -268,6 +268,97 @@ Runtime Factory 在已启动的 KV260 上建立可运行的 FPGA Python 基础�
 
 Runtime Factory 不实现业务 Worker，也不把未部署的 Worker 报为 OK。
 
+### 19.1 KV260 Runtime 文件系统布局
+
+部署 PC 上与 Runtime Factory 直接相关的仓库结构如下；烧卡操作步骤仍以 `KV260完整执行流程.md` 为准。
+
+```text
+/home/robot/kv260/
+├── prepare_kv260_image.sh
+├── runtime_init_kv260.sh
+├── deploy_kv260.sh
+├── runtime/
+│   ├── ensure_sdk_ppa.sh
+│   ├── install_runtime.sh
+│   ├── install_xrt.sh
+│   ├── install_zocl.sh
+│   ├── install_pyxrt.sh
+│   ├── install_pynq.sh
+│   └── pynq_runtime/
+│       ├── pynq.dts
+│       ├── insert_dtbo.py
+│       ├── clear_pl_state.py
+│       └── validate_runtime.py
+├── scripts/
+│   ├── check_xrt.sh
+│   ├── check_zocl.sh
+│   ├── check_fpga.sh
+│   └── kv260_check.sh
+└── logs/
+    └── kv260N.log
+```
+
+`runtime_init_kv260.sh` 通过 SSH 上传 `runtime/` 和 `scripts/` 后，KV260 端的布局为：
+
+```text
+KV260 filesystem
+│
+├── /tmp/kv260-runtime/
+│   ├── runtime/
+│   └── scripts/
+│
+├── /opt/kv260-pynq/
+│   ├── bin/
+│   ├── lib/python3.12/site-packages/
+│   └── share/kv260-runtime/
+│       ├── pynq.dts
+│       ├── pynq.dtbo
+│       ├── insert_dtbo.py
+│       ├── clear_pl_state.py
+│       └── validate_runtime.py
+│
+├── /opt/fpga/                         （应用部署，可选）
+│   ├── design.bit
+│   └── design.hwh
+│
+├── /usr/local/lib/python3.12/dist-packages/
+│   └── pyxrt.cpython-312-aarch64-linux-gnu.so
+│
+├── /var/cache/kv260-runtime/
+│   └── xrt-source/
+│       └── <XRT Debian version>/
+│           ├── download/
+│           ├── source/
+│           └── build/
+│
+├── /etc/
+│   ├── xocl.txt
+│   ├── profile.d/
+│   │   └── kv260-pynq.sh
+│   └── systemd/system/
+│       ├── kv260-pynq-dt.service
+│       └── kv260-pynq-clear-pl-state.service
+│
+└── /lib/modules/<kernel>/updates/dkms/
+    └── zocl.ko*
+```
+
+`/tmp/kv260-runtime` 只是 launcher 每次上传前重建的临时 staging，不是最终安装目录。持久化 Minimal PYNQ Runtime 主要位于 `/opt/kv260-pynq`；系统 `pyxrt` 位于 `/usr/local/lib/python3.12/dist-packages`；systemd 配置位于 `/etc/systemd/system`；ZOCL 由 dpkg/DKMS 和 `/lib/modules` 管理。`/opt/fpga` 由应用部署流程提供，Runtime 本身不创建该目录，也不要求 `design.bit`/`design.hwh` 必须存在。
+
+| 路径 | 用途 | 持久化/管理方式 |
+| --- | --- | --- |
+| `/tmp/kv260-runtime` | SSH 上传的 Runtime 与检查脚本 staging | 临时；每次 launcher 上传前重建 |
+| `/opt/kv260-pynq` | Python 3.12 venv、PYNQ packages | 持久化 Runtime |
+| `/opt/kv260-pynq/share/kv260-runtime` | DTS/DTBO、插入、PL state 清理和验证工具 | 持久化 Runtime |
+| `/usr/local/lib/python3.12/dist-packages/pyxrt...so` | 与当前 XRT Debian version 匹配的系统 Python binding | 持久化系统 Runtime |
+| `/var/cache/kv260-runtime/xrt-source` | `xilinx-runtime` source、下载和 pyxrt build cache | 缓存；可重建 |
+| `/etc/profile.d/kv260-pynq.sh` | `KV260_PYNQ_VENV`、`BOARD`、`XILINX_XRT` 和 PATH 环境 | 持久化系统配置 |
+| `/etc/xocl.txt` | KV260 XRT/Kria platform 兼容配置 | 持久化系统配置 |
+| `/etc/systemd/system/kv260-pynq-dt.service` | 启动时加载 ZOCL 与 Minimal PYNQ DT | 持久化 systemd 配置 |
+| `/etc/systemd/system/kv260-pynq-clear-pl-state.service` | DT 就绪后清理 stale PYNQ PL state | 持久化 systemd 配置 |
+| `/opt/fpga` | 匹配的应用 `design.bit`/`design.hwh` | 应用文件；由应用部署管理 |
+| `/lib/modules/<kernel>/updates/dkms/zocl.ko*` | 当前 kernel 的 ZOCL module | dpkg/DKMS 管理 |
+
 ## 20. Image Factory
 
 `prepare_kv260_image.sh` 只负责：镜像写盘、rootfs 扩容、hostname、静态网络、用户、SSH 和 cloud-init。它不在离线 ARM rootfs 中安装 PYNQ/XRT，也不写入应用 Overlay。这样所有需要在目标架构和当前 kernel 上验证的 Runtime 工作都留在启动后的 KV260 上完成。
