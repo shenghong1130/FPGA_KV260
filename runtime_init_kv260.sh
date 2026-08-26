@@ -5,6 +5,7 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 RUNTIME_DIR="$SCRIPT_DIR/runtime"
 CHECK_DIR="$SCRIPT_DIR/scripts"
+WORKER_DIR="$SCRIPT_DIR/worker"
 LOG_DIR="$SCRIPT_DIR/logs"
 
 die() {
@@ -21,7 +22,7 @@ usage() {
   $0 2
 
 编号范围为 1-20。脚本会连接对应的 ubuntu@192.168.31.(81+编号)，
-在已启动的 ARM64 KV260 上执行 XRT、ZOCL、FPGA Manager 和 Minimal PYNQ 初始化。
+在已启动的 ARM64 KV260 上执行 XRT、ZOCL、Minimal PYNQ 和 Worker HTTP 服务初始化。
 若发现新 Xilinx kernel，脚本会自动重启目标并继续 Runtime Stage 2。
 EOF
   exit 2
@@ -32,7 +33,8 @@ BOARD_ID="$1"
 [[ "$BOARD_ID" =~ ^([1-9]|1[0-9]|20)$ ]] || die "KV260 编号必须在 1-20 之间: $BOARD_ID"
 [[ -d "$RUNTIME_DIR" ]] || die "找不到 Runtime 目录: $RUNTIME_DIR"
 [[ -d "$CHECK_DIR" ]] || die "找不到检查脚本目录: $CHECK_DIR"
-for command in ssh tar tee timeout; do
+[[ -d "$WORKER_DIR" ]] || die "找不到 Worker 目录: $WORKER_DIR"
+for command in curl python3 ssh tar tee timeout; do
   command -v "$command" >/dev/null || die "缺少命令: $command"
 done
 
@@ -73,10 +75,53 @@ REMOTE_HOSTNAME=$(ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" hostname)
 echo "SSH target verified: $REMOTE_HOSTNAME" | tee -a "$LOG_FILE"
 
 upload_runtime() {
-  echo "正在上传 Runtime 和检查脚本..." | tee -a "$LOG_FILE"
-  tar -C "$SCRIPT_DIR" -czf - runtime scripts | \
+  echo "正在上传 Runtime、检查脚本和 Worker..." | tee -a "$LOG_FILE"
+  tar -C "$SCRIPT_DIR" -czf - runtime scripts worker | \
     ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" \
       'rm -rf /tmp/kv260-runtime && mkdir -p /tmp/kv260-runtime && tar -xzf - -C /tmp/kv260-runtime'
+}
+
+validate_worker_api() {
+  local health_json
+  local status_json
+  local active_state
+  local enabled_state
+
+  echo "正在从部署 PC 验证 KV260 Worker API..." | tee -a "$LOG_FILE"
+  active_state=$(ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" \
+    'systemctl is-active kv260-worker.service')
+  enabled_state=$(ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" \
+    'systemctl is-enabled kv260-worker.service')
+  [[ "$active_state" == active ]] || die "kv260-worker.service 未处于 active 状态"
+  [[ "$enabled_state" == enabled ]] || die "kv260-worker.service 未启用开机自启"
+
+  health_json=$(curl --noproxy '*' --silent --show-error --fail \
+    --connect-timeout 5 --max-time 10 "http://${IP_ADDRESS}:8080/health") || \
+    die "无法从部署 PC 访问 http://${IP_ADDRESS}:8080/health"
+  status_json=$(curl --noproxy '*' --silent --show-error --fail \
+    --connect-timeout 5 --max-time 10 "http://${IP_ADDRESS}:8080/status") || \
+    die "无法从部署 PC 访问 http://${IP_ADDRESS}:8080/status"
+
+  python3 - "$HOSTNAME" "$health_json" "$status_json" <<'PY'
+import json
+import sys
+
+expected_board = sys.argv[1]
+health = json.loads(sys.argv[2])
+status = json.loads(sys.argv[3])
+if health.get("ok") is not True or health.get("board") != expected_board:
+    raise RuntimeError(f"unexpected Worker health: {health}")
+expected_status = {
+    "board": expected_board,
+    "fpga_ready": False,
+    "lease_id": None,
+    "artifact_id": None,
+}
+if status != expected_status:
+    raise RuntimeError(f"unexpected initial Worker status: {status}")
+print(f"Worker health: OK ({health})")
+print(f"Worker status: OK ({status})")
+PY
 }
 
 run_runtime() {
@@ -136,6 +181,7 @@ if (( runtime_rc == 75 )); then
 fi
 
 (( runtime_rc == 0 )) || die "Runtime Factory 失败，远端退出码: $runtime_rc；请查看 $LOG_FILE"
+validate_worker_api 2>&1 | tee -a "$LOG_FILE"
 
 cat <<EOF | tee -a "$LOG_FILE"
 ========================================
@@ -149,6 +195,10 @@ ZOCL Driver: OK
 pyxrt: OK
 PYNQ version: 3.1.2
 Minimal PYNQ Runtime: OK
+Worker Service: active
+Worker API: http://${IP_ADDRESS}:8080
+Worker State: IDLE-ready
+Autostart: enabled
 Overlay Hardware Test: see Runtime report (NOT RUN when design files are unavailable)
 Log: $LOG_FILE
 ========================================

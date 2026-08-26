@@ -184,7 +184,7 @@ Central → Worker：`GET /health`、`GET /status`、`POST /internal/deploy`、`
 
 ### 20.1 当前已经实现
 
-Artifact 自动版本、SQLite 持久化、StudentLease、PredictRequest、Lazy Allocation、随机 IDLE 分配、固定 Worker、Artifact 切换、FIFO、全局/per-student lock、idle timeout、LRU reclaim、Worker health、Mock Worker、pytest 和 Smoke Test。
+Artifact 自动版本、SQLite 持久化、StudentLease、PredictRequest、Lazy Allocation、随机 IDLE 分配、固定 Worker、Artifact 切换、FIFO、全局/per-student lock、idle timeout、LRU reclaim、Worker health、Mock Worker、真实 KV260 Worker HTTP contract、PYNQ Overlay 部署、pytest 和 Smoke Test。
 
 ### 20.2 测试边界
 
@@ -198,7 +198,7 @@ Mock 验证 HTTP contract、ownership、deploy count、串行、Queue 和 reclai
 
 ### 20.4 当前尚未实现
 
-真实 KV260 PYNQ 业务 Worker、业务级 DMA 协议、身份认证、TLS、Web UI、HA 和多进程分布式锁。V1 只能运行单 Uvicorn process，禁止 `--workers 4`。
+应用专用 payload 与 AXI DMA/MMIO 的映射协议、生产身份认证、TLS、HA 和多进程分布式锁。真实 Worker 在 adapter 未配置时返回 HTTP 501，不会用 echo 伪造 FPGA 结果。V1 只能运行单 Uvicorn process，禁止 `--workers 4`。
 
 ## 21. Runtime Factory
 
@@ -206,16 +206,17 @@ Runtime Factory 只负责建立板卡基础能力：
 
 ```text
 [preflight] System and FPGA Manager
-[1/7] XRT userspace
-[2/7] XRT-matched ZOCL DKMS driver
-[3/7] XRT-matched Python 3.12 pyxrt binding
-[4/7] Minimal PYNQ 3.1.2 packages and runtime assets
-[5/7] PYNQ device tree and boot services
-[6/7] Minimal PYNQ functional validation
-[7/7] Final diagnostics and worker runtime report
+[1/8] XRT userspace
+[2/8] XRT-matched ZOCL DKMS driver
+[3/8] XRT-matched Python 3.12 pyxrt binding
+[4/8] Minimal PYNQ 3.1.2 packages and runtime assets
+[5/8] PYNQ device tree and boot services
+[6/8] Minimal PYNQ functional validation
+[7/8] KV260 Worker HTTP service
+[8/8] Final diagnostics and worker runtime report
 ```
 
-它验证 XRT、ZOCL、pyxrt、PYNQ、Device Tree、`EmbeddedDevice` 和 `allocate()`，不负责 Artifact、Lease、Request 或业务 Worker API。
+它验证 XRT、ZOCL、pyxrt、PYNQ、Device Tree、`EmbeddedDevice` 和 `allocate()`，随后安装并启用 `kv260-worker.service`。Runtime Factory 负责 Worker 基础 HTTP contract 和 Overlay 部署能力；Central 仍负责 Artifact、Lease 与 Request，应用专用 predict adapter 独立实现。
 
 ### 21.1 部署 PC 端仓库布局
 
@@ -241,6 +242,14 @@ kv260/
 │   ├── check_zocl.sh
 │   ├── check_fpga.sh
 │   └── kv260_check.sh
+├── worker/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── state.py
+│   │   └── fpga.py
+│   ├── requirements.txt
+│   ├── install_worker.sh
+│   └── kv260-worker.service
 ├── server/
 └── logs/
     └── kv260N.log
@@ -253,7 +262,8 @@ KV260 filesystem
 │
 ├── /tmp/kv260-runtime/
 │   ├── runtime/
-│   └── scripts/
+│   ├── scripts/
+│   └── worker/
 │
 ├── /opt/kv260-pynq/
 │   ├── bin/
@@ -264,6 +274,13 @@ KV260 filesystem
 │       ├── insert_dtbo.py
 │       ├── clear_pl_state.py
 │       └── validate_runtime.py
+│
+├── /opt/kv260-worker/
+│   ├── app/
+│   └── requirements.txt
+│
+├── /var/lib/kv260-worker/
+│   └── artifacts/
 │
 ├── /opt/fpga/
 │   ├── design.bit
@@ -281,25 +298,29 @@ KV260 filesystem
 │   │   └── kv260-pynq.sh
 │   └── systemd/system/
 │       ├── kv260-pynq-dt.service
-│       └── kv260-pynq-clear-pl-state.service
+│       ├── kv260-pynq-clear-pl-state.service
+│       └── kv260-worker.service
 │
 └── /lib/modules/<kernel>/updates/dkms/
     └── zocl.ko*
 ```
 
-`/tmp/kv260-runtime` 是 PC launcher 通过 SSH 上传的临时 staging，不是最终安装目录。主要持久化 Runtime 位于 `/opt/kv260-pynq`；系统 pyxrt 位于 `/usr/local/lib/python3.12/dist-packages`；systemd 配置位于 `/etc/systemd/system`；ZOCL 由 DKMS 和 `/lib/modules` 管理；应用 FPGA 文件默认位于 `/opt/fpga`。
+`/tmp/kv260-runtime` 是 PC launcher 通过 SSH 上传的临时 staging，不是最终安装目录。主要持久化 Runtime 位于 `/opt/kv260-pynq`，Worker 位于 `/opt/kv260-worker`，Worker Artifact 位于 `/var/lib/kv260-worker/artifacts`；系统 pyxrt 位于 `/usr/local/lib/python3.12/dist-packages`；systemd 配置位于 `/etc/systemd/system`；ZOCL 由 DKMS 和 `/lib/modules` 管理。
 
 | 路径 | 用途 | 分类 |
 | --- | --- | --- |
-| `/tmp/kv260-runtime` | SSH 上传 Runtime 与检查脚本 | 临时 staging |
+| `/tmp/kv260-runtime` | SSH 上传 Runtime、检查脚本与 Worker | 临时 staging |
 | `/opt/kv260-pynq` | Python venv 和 Minimal PYNQ | 持久化 Runtime |
 | `/opt/kv260-pynq/share/kv260-runtime` | DTS/DTBO、安装辅助和验证脚本 | 持久化 Runtime |
+| `/opt/kv260-worker` | Worker FastAPI 应用 | 持久化 Worker Runtime |
+| `/var/lib/kv260-worker/artifacts` | Worker 收到的 bit/hwh | 持久化 Worker 数据 |
 | `/usr/local/lib/python3.12/dist-packages/pyxrt...so` | 与 XRT Debian 版本匹配的 pyxrt | 持久化系统 Python 扩展 |
 | `/var/cache/kv260-runtime/xrt-source` | pyxrt 源码与构建缓存 | 可重建缓存 |
 | `/etc/profile.d/kv260-pynq.sh` | Shell Runtime 环境 | 系统配置 |
 | `/etc/xocl.txt` | KV260 XRT/PYNQ 板卡配置 | 系统配置 |
 | `/etc/systemd/system/kv260-pynq-dt.service` | 启动时加载 PYNQ DT overlay | systemd 配置 |
 | `/etc/systemd/system/kv260-pynq-clear-pl-state.service` | 启动时清理 PYNQ PL state | systemd 配置 |
+| `/etc/systemd/system/kv260-worker.service` | 启动真实 Worker HTTP API | systemd 配置 |
 | `/opt/fpga` | 默认应用 bit/hwh | 应用文件 |
 | `/lib/modules/<kernel>/updates/dkms/zocl.ko*` | 当前 kernel 的 ZOCL module | DKMS/package 管理 |
 

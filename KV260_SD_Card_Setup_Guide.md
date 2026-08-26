@@ -190,17 +190,18 @@ grep -E '^Cma(Total|Free):' /proc/meminfo
 ./runtime_init_kv260.sh 2
 ```
 
-launcher 会核对远端 hostname，将 `runtime/` 和 `scripts/` 上传到目标板，然后依次执行：
+launcher 会核对远端 hostname，将 `runtime/`、`scripts/` 和 `worker/` 上传到目标板，然后依次执行：
 
 ```text
 [preflight] System and FPGA Manager
-[1/7] XRT userspace
-[2/7] XRT-matched ZOCL DKMS driver
-[3/7] XRT-matched Python 3.12 pyxrt binding
-[4/7] Minimal PYNQ 3.1.2 packages and runtime assets
-[5/7] PYNQ device tree and boot services
-[6/7] Minimal PYNQ functional validation
-[7/7] Final diagnostics and worker runtime report
+[1/8] XRT userspace
+[2/8] XRT-matched ZOCL DKMS driver
+[3/8] XRT-matched Python 3.12 pyxrt binding
+[4/8] Minimal PYNQ 3.1.2 packages and runtime assets
+[5/8] PYNQ device tree and boot services
+[6/8] Minimal PYNQ functional validation
+[7/8] KV260 Worker HTTP service
+[8/8] Final diagnostics and worker runtime report
 ```
 
 如果 Runtime 返回 `REBOOT_REQUIRED`，PC 端 `runtime_init_kv260.sh` 会自动执行：
@@ -238,6 +239,10 @@ Device:                    EmbeddedDevice
 allocate:                  OK (...)
 Minimal PYNQ:              OK
 KV260 PYNQ Worker Runtime: OK
+Worker Service:            active
+Worker API:                http://192.168.31.x:8080
+Worker State:              IDLE-ready
+Autostart:                 enabled
 KV260 Runtime Factory Complete
 ```
 
@@ -260,6 +265,8 @@ sudo reboot
 ```bash
 systemctl is-active kv260-pynq-dt.service
 systemctl is-active kv260-pynq-clear-pl-state.service
+systemctl is-active kv260-worker.service
+systemctl is-enabled kv260-worker.service
 ```
 
 预期：
@@ -267,6 +274,8 @@ systemctl is-active kv260-pynq-clear-pl-state.service
 ```text
 active
 active
+active
+enabled
 ```
 
 继续检查目标标记、ZOCL 和 render node：
@@ -289,6 +298,15 @@ sudo env \
   /opt/kv260-pynq/bin/python \
   /opt/kv260-pynq/share/kv260-runtime/validate_runtime.py
 ```
+
+同时验证开机自启的 Worker HTTP API：
+
+```bash
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/status
+```
+
+空闲板卡应报告正确 hostname、`lease_id=null`、`artifact_id=null` 和 `fpga_ready=false`。`journalctl -u kv260-worker -f` 用于跟踪 Worker 日志；不再需要手工运行 `test_worker.py`。
 
 预期重点：
 
@@ -405,10 +423,13 @@ Python 3.12 binding 安装到系统 local platlib：
 
 /etc/systemd/system/
 ├── kv260-pynq-dt.service
-└── kv260-pynq-clear-pl-state.service
+├── kv260-pynq-clear-pl-state.service
+└── kv260-worker.service
 ```
 
 `pynq.dts`/`pynq.dtbo` 提供 live Device Tree 中的 `xlnx,zocl` 和 `/chosen/pynq_board = "KV260"`，使 PYNQ 得到 `ON_TARGET=True` 并选择 `EmbeddedDevice`。clear PL state service 在启动时清理 stale PYNQ PL metadata。
+
+真实 Worker 持久化安装在 `/opt/kv260-worker`，Artifact 缓存位于 `/var/lib/kv260-worker/artifacts`。`kv260-worker.service` 在 PYNQ 两个 oneshot service 之后启动，并监听 `0.0.0.0:8080`。
 
 ## A.5 构建和 Runtime 依赖
 
@@ -430,10 +451,12 @@ device-tree-compiler
 libdrm-dev
 libffi-dev
 libssl-dev
+curl
+iproute2
 linux-headers-<Xilinx kernel>
 ```
 
-其中 `software-properties-common` 只在缺少 `add-apt-repository` 时安装；kernel headers 只在对应 kernel build tree 缺失时安装。
+其中 `software-properties-common` 只在缺少 `add-apt-repository` 时安装；kernel headers 只在对应 kernel build tree 缺失时安装。Worker 还在现有 `/opt/kv260-pynq` venv 中安装 FastAPI、Uvicorn、Pydantic 和 python-multipart，不创建第二套 PYNQ。
 
 ## A.6 明确没有安装什么
 

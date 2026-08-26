@@ -4,7 +4,7 @@
 
 本文只介绍 Central Server 的安装、启动、Sessionless HTTP API、Mock Cluster 和测试方法。总体架构见 [KV260_PYNQ_Framework.md](KV260_PYNQ_Framework.md)，PYNQ/FPGA 原理见 [KV260_PYNQ_Architecture_Notes.md](KV260_PYNQ_Architecture_Notes.md)，板卡部署见 [KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)。
 
-Central Server V1 与 Mock Worker 已实现；真实 KV260 PYNQ 业务 Worker仍是下一阶段。V1 依靠 asyncio lock 保证调度原子性，只能使用单 Uvicorn process。
+Central Server V1、Mock Worker 和真实 KV260 Worker HTTP 服务均已实现。真实 Worker 可以完成健康检查、ownership、Artifact 校验和 PYNQ Overlay 部署；应用专用 DMA/MMIO predict adapter 仍是下一阶段。V1 依靠 asyncio lock 保证调度原子性，只能使用单 Uvicorn process。
 
 ## 2. 安装开发环境
 
@@ -34,6 +34,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 远程客户端使用 `http://<CENTRAL_IP>:8000`，不能使用指向客户端自身的 `127.0.0.1`。禁止添加 `--workers 4`。
 
+真实 Worker 已包含在板卡的 `runtime_init_kv260.sh` 自动部署流程中，并由 `kv260-worker.service` 在 `0.0.0.0:8080` 单进程运行。无需手工运行 `test_worker.py`。在板卡上可检查：
+
+```bash
+systemctl status kv260-worker
+journalctl -u kv260-worker -f
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/status
+```
+
 ### 3.2 使用 Mock Worker
 
 ```bash
@@ -52,10 +61,16 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 curl http://127.0.0.1:8000/health
 ```
 
-交互式 API 页面：`http://127.0.0.1:8000/docs`。
+Admin Dashboard：`http://127.0.0.1:8000/ui/`
 
-Admin Dashboard：`http://127.0.0.1:8000/ui/`。局域网远程访问时，将
-`127.0.0.1` 替换为 Central Server 的实际 IP。
+API Docs：`http://127.0.0.1:8000/docs`
+
+局域网远程访问时，将 `127.0.0.1` 替换为 Central Server 的实际 IP：
+
+```text
+http://<CENTRAL_IP>:8000/ui/
+http://<CENTRAL_IP>:8000/docs
+```
 
 ## 4. HTTP API 使用
 
@@ -189,6 +204,15 @@ curl -s http://127.0.0.1:8000/workers | python3 -m json.tool
 
 Admin 响应包含 `board/state/lease_id/student_id/artifact_id/fpga_ready/last_seen/last_error`。
 
+常用 Worker 状态含义：
+
+| 状态 | 含义 |
+| --- | --- |
+| `OFFLINE` | Central 无法通过 `:8080` 访问 Worker |
+| `IDLE` | Worker 健康且没有 Lease，可被分配 |
+| `READY` | 已被 Lease 占用且 Overlay 已就绪 |
+| `BUSY` | 当前正在执行一次 predict |
+
 ### 4.8 查看 Central 健康状态：Admin → Central
 
 ```bash
@@ -207,7 +231,7 @@ curl -s http://127.0.0.1:8000/health | python3 -m json.tool
 | `POST /predict` | 执行一次计算 |
 | `POST /internal/release` | 解除 Lease ownership |
 
-这些接口只由 Central 调用。Mock 实现该 contract，但不执行 PYNQ、Overlay、DMA 或 MMIO。
+这些接口只由 Central 调用。真实 Worker 会校验并加载 PYNQ Overlay；在应用专用 predict adapter 尚未配置时，`POST /predict` 明确返回 `501 FPGA predict adapter not configured`，不会伪造 FPGA 结果。Mock 实现相同 contract，但不执行 PYNQ、Overlay、DMA 或 MMIO。
 
 ## 5. 学生完整使用示例
 

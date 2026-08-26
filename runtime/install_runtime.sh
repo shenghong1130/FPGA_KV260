@@ -5,6 +5,7 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
 CHECK_DIR="$PROJECT_DIR/scripts"
+WORKER_DIR="$PROJECT_DIR/worker"
 
 die() {
   echo "Runtime deployment failed: $*" >&2
@@ -16,6 +17,8 @@ die() {
 [[ $(uname -r) == *xilinx* ]] || die "当前内核不是 Xilinx kernel: $(uname -r)"
 [[ -e /sys/class/fpga_manager/fpga0 ]] || die "找不到 FPGA Manager fpga0"
 [[ -d "$CHECK_DIR" ]] || die "找不到检查脚本目录: $CHECK_DIR"
+[[ -x "$WORKER_DIR/install_worker.sh" ]] || \
+  die "找不到 Worker installer: $WORKER_DIR/install_worker.sh"
 
 if command -v cloud-init >/dev/null 2>&1; then
   # cloud-init exit code 2 means it completed with recoverable warnings;
@@ -53,10 +56,10 @@ echo "aarch64: OK"
 echo "Xilinx Kernel: OK"
 echo "FPGA Manager: OK ($(</sys/class/fpga_manager/fpga0/state))"
 
-printf '\n[1/7] XRT userspace\n'
+printf '\n[1/8] XRT userspace\n'
 "$SCRIPT_DIR/install_xrt.sh"
 
-printf '\n[2/7] XRT-matched ZOCL DKMS driver\n'
+printf '\n[2/8] XRT-matched ZOCL DKMS driver\n'
 set +e
 "$SCRIPT_DIR/install_zocl.sh"
 zocl_rc=$?
@@ -68,18 +71,18 @@ elif (( zocl_rc != 0 )); then
   die "ZOCL 安装失败，exit=$zocl_rc"
 fi
 
-printf '\n[3/7] XRT-matched Python 3.12 pyxrt binding\n'
+printf '\n[3/8] XRT-matched Python 3.12 pyxrt binding\n'
 "$SCRIPT_DIR/install_pyxrt.sh"
 
-printf '\n[4/7] Minimal PYNQ 3.1.2 packages and runtime assets\n'
+printf '\n[4/8] Minimal PYNQ 3.1.2 packages and runtime assets\n'
 PYNQ_DEFER_ACTIVATION=1 "$SCRIPT_DIR/install_pynq.sh"
 
-printf '\n[5/7] PYNQ device tree and boot services\n'
+printf '\n[5/8] PYNQ device tree and boot services\n'
 systemctl restart kv260-pynq-dt.service kv260-pynq-clear-pl-state.service
 systemctl is-active --quiet kv260-pynq-dt.service || \
   die "kv260-pynq-dt.service 未处于 active 状态"
 
-printf '\n[6/7] Minimal PYNQ functional validation\n'
+printf '\n[6/8] Minimal PYNQ functional validation\n'
 pynq_venv="${PYNQ_VENV:-/opt/kv260-pynq}"
 pynq_share="$pynq_venv/share/kv260-runtime"
 overlay_dir="${PYNQ_OVERLAY_DIR:-/opt/fpga}"
@@ -96,7 +99,10 @@ BOARD=KV260 XILINX_XRT=/usr \
   "$pynq_venv/bin/python" "$pynq_share/validate_runtime.py" "${validation_args[@]}"
 echo "Minimal Kria-PYNQ Runtime Installation: OK"
 
-printf '\n[7/7] Final diagnostics and worker runtime report\n'
+printf '\n[7/8] KV260 Worker HTTP service\n'
+"$WORKER_DIR/install_worker.sh"
+
+printf '\n[8/8] Final diagnostics and worker runtime report\n'
 "$CHECK_DIR/check_zocl.sh"
 "$CHECK_DIR/check_xrt.sh"
 "$CHECK_DIR/check_fpga.sh"
