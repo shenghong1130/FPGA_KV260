@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="KV260 Central Admin Dashboard">
+  <title>KV260 FPGA 共享计算平台</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">K</div>
+      <div>
+        <h1>KV260 FPGA 共享计算平台</h1>
+        <p>KV260 FPGA Shared Computing Platform · Central Admin Dashboard</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="connection-block">
+        <span id="platform-status" class="platform-status offline"><span class="status-dot"></span>Central Offline</span>
+        <span class="update-time"><span class="secondary">Last update</span> <time id="last-update">—</time></span>
+      </div>
+      <button id="refresh-button" class="icon-button" type="button" aria-label="立即刷新">↻</button>
+      <button id="theme-button" class="icon-button" type="button" aria-label="切换浅色或深色主题">◐</button>
+    </div>
+  </header>
+
+  <section class="api-bar" aria-label="Central API 设置">
+    <label for="api-base">Central API</label>
+    <input id="api-base" type="url" inputmode="url" spellcheck="false" aria-describedby="api-hint">
+    <button id="save-api" class="button primary" type="button">保存</button>
+    <span id="api-hint" class="hint">同源默认使用当前网页地址；本地文件默认使用 http://127.0.0.1:8000</span>
+  </section>
+
+  <nav class="tabs" aria-label="Dashboard navigation">
+    <a href="#/overview" data-nav="overview">总览 <small>Overview</small></a>
+    <a href="#/workers" data-nav="workers">Worker</a>
+    <a href="#/artifacts" data-nav="artifacts">Artifact</a>
+    <a href="#/requests" data-nav="requests">计算请求 <small>Requests</small></a>
+    <a href="#/student" data-nav="student">学生状态 <small>Student</small></a>
+    <a href="#/tools" data-nav="tools">工具 <small>Tools</small></a>
+    <a id="api-docs" href="/docs" target="_blank" rel="noopener noreferrer">API Docs ↗</a>
+  </nav>
+
+  <main id="main-content">
+    <section id="view-overview" class="view" data-view="overview" aria-labelledby="overview-title">
+      <div class="section-heading"><div><h2 id="overview-title">平台总览</h2><p>Overview</p></div></div>
+      <div id="offline-banner" class="alert danger hidden" role="alert"></div>
+      <button id="worker-alert" class="alert warning hidden" type="button"></button>
+      <div id="summary-cards" class="summary-grid" aria-live="polite"></div>
+      <section class="panel utilization-panel">
+        <div class="panel-title"><div><h3>Worker 利用率</h3><p>Worker Utilization</p></div><strong id="utilization-label">—</strong></div>
+        <div class="progress" role="progressbar" aria-label="Worker utilization" aria-valuemin="0" aria-valuemax="100"><span id="utilization-bar"></span></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><h3>Worker 状态</h3><p>Worker Status</p></div><button class="link-button" data-go="workers">详细筛选 →</button></div>
+        <div id="overview-workers" class="worker-grid"><p class="empty">Loading...</p></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><h3>最近上传</h3><p>Recent Artifacts</p></div><button class="link-button" data-go="artifacts">查看全部 →</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Student</th><th>Version</th><th>Status</th><th>Uploaded</th></tr></thead><tbody id="recent-artifacts"></tbody></table></div>
+      </section>
+    </section>
+
+    <section id="view-workers" class="view" data-view="workers" aria-labelledby="workers-title">
+      <div class="section-heading"><div><h2 id="workers-title">Worker 状态</h2><p>Worker Status</p></div></div>
+      <div class="toolbar">
+        <label>搜索 Worker / Student / Artifact<input id="worker-search" type="search" placeholder="kv260 / student / artifact"></label>
+        <label>状态过滤<select id="worker-state-filter"><option value="all">全部 / All</option><option value="issues">ERROR / OFFLINE</option><option>IDLE</option><option>RESERVED</option><option>DEPLOYING</option><option>READY</option><option>BUSY</option><option>ERROR</option><option>OFFLINE</option></select></label>
+      </div>
+      <div id="worker-grid" class="worker-grid"><p class="empty">Loading...</p></div>
+    </section>
+
+    <section id="view-artifacts" class="view" data-view="artifacts" aria-labelledby="artifacts-title">
+      <div class="section-heading"><div><h2 id="artifacts-title">Artifact 管理</h2><p>Artifact Management</p></div></div>
+      <section class="panel upload-panel"><h3>上传 Artifact <small>Upload Artifact</small></h3><form id="artifact-upload-form" class="upload-form" data-upload-form><label>Student ID<input name="student_id" maxlength="128" required></label><label>design.bit<input name="bit" type="file" accept=".bit" required></label><label>design.hwh<input name="hwh" type="file" accept=".hwh" required></label><button class="button primary" type="submit">上传 / Upload</button></form><div class="form-result" aria-live="polite"></div></section>
+      <div class="toolbar"><label>Student 搜索<input id="artifact-student-filter" type="search"></label><label>Artifact ID<input id="artifact-id-filter" type="search"></label><label>状态<select id="artifact-status-filter"><option value="all">全部 / All</option><option>READY</option><option>FAILED</option></select></label><label class="check-label"><input id="artifact-latest-only" type="checkbox">仅显示最新版 / Latest only</label></div>
+      <div class="table-wrap panel flush"><table><thead><tr><th>Student</th><th>Version</th><th>Artifact ID</th><th>Status</th><th>BIT</th><th>HWH</th><th>Uploaded</th><th>SHA-256</th></tr></thead><tbody id="artifact-table"></tbody></table></div>
+      <button id="artifact-show-more" class="button secondary hidden" type="button">显示更多 / Show more</button>
+    </section>
+
+    <section id="view-requests" class="view" data-view="requests" aria-labelledby="requests-title">
+      <div class="section-heading"><div><h2 id="requests-title">计算请求</h2><p>Predict Requests</p></div></div>
+      <div id="request-list-unavailable" class="alert info">当前 Central API 未提供全局 Request 列表接口。<br><span>Global request listing is not available in the current Central API.</span></div>
+      <section class="panel query-panel"><h3>按 Request ID 查询</h3><form id="request-query-form" class="inline-form"><label for="request-id-input">Request ID</label><input id="request-id-input" placeholder="req_xxxxx" required><button class="button primary" type="submit">查询</button></form><div id="request-detail" class="detail-output empty">请输入 Request ID。</div></section>
+    </section>
+
+    <section id="view-student" class="view" data-view="student" aria-labelledby="student-title">
+      <div class="section-heading"><div><h2 id="student-title">学生状态</h2><p>Student Status</p></div></div>
+      <section class="panel query-panel"><form id="student-query-form" class="inline-form"><label for="student-id-input">Student ID</label><input id="student-id-input" placeholder="student01" maxlength="128" required><button class="button primary" type="submit">查询</button></form><div id="student-detail" class="detail-output empty">请输入 Student ID。</div></section>
+    </section>
+
+    <section id="view-tools" class="view" data-view="tools" aria-labelledby="tools-title">
+      <div class="section-heading"><div><h2 id="tools-title">管理员工具</h2><p>Tools</p></div></div>
+      <div class="tools-grid">
+        <section class="panel upload-panel"><h3>上传 Artifact <small>Upload Artifact</small></h3><form id="tools-upload-form" class="upload-form stacked" data-upload-form><label>Student ID<input name="student_id" maxlength="128" required></label><label>design.bit<input name="bit" type="file" accept=".bit" required></label><label>design.hwh<input name="hwh" type="file" accept=".hwh" required></label><button class="button primary" type="submit">上传 / Upload</button></form><div class="form-result" aria-live="polite"></div></section>
+        <section class="panel"><h3>FPGA 请求测试 <small>Predict Tester</small></h3><form id="predict-form" class="stacked"><label>Student ID<input id="predict-student" maxlength="128" required></label><label>Payload JSON<textarea id="predict-payload" rows="9" spellcheck="false">{
+  "value": 123
+}</textarea></label><div class="button-row"><button id="predict-submit" class="button primary" type="submit">发送请求 / Send Predict</button><button id="stop-polling" class="button secondary hidden" type="button">停止查询</button></div></form><div id="predict-result" class="detail-output empty">尚未发送请求。</div></section>
+      </div>
+    </section>
+  </main>
+
+  <footer><span>KV260 Central Admin Dashboard · UI v1</span><span>Central API: <code id="footer-api">—</code></span></footer>
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <dialog id="worker-dialog" aria-labelledby="worker-dialog-title"><div class="dialog-head"><h2 id="worker-dialog-title">Worker Detail</h2><button id="close-dialog" class="icon-button" type="button" aria-label="关闭 Worker 详情">×</button></div><div id="worker-dialog-content"></div></dialog>
+  <script src="dashboard.js" defer></script>
+</body>
+</html>
