@@ -54,6 +54,9 @@ curl http://127.0.0.1:8000/health
 
 交互式 API 页面：`http://127.0.0.1:8000/docs`。
 
+Admin Dashboard：`http://127.0.0.1:8000/ui/`。局域网远程访问时，将
+`127.0.0.1` 替换为 Central Server 的实际 IP。
+
 ## 4. HTTP API 使用
 
 ### 4.1 API 使用关系
