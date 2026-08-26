@@ -2,6 +2,12 @@
 
 本文从初学者视角说明 KV260、Zynq、Ubuntu、PYNQ、自定义 FPGA Overlay 以及数据传输组件之间的关系。重点是分清“谁运行软件、谁执行硬件计算、谁负责控制、谁负责搬运数据”。
 
+相关文档：
+
+- 共享计算平台总体架构：[KV260_PYNQ_Framework.md](KV260_PYNQ_Framework.md)
+- SD 卡制作和基础 Runtime 部署：[KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)
+- Central Server 安装、API 和测试：[KV260_Server_Usage_Guide.md](KV260_Server_Usage_Guide.md)
+
 ## 1. KV260 平台概述
 
 KV260 的全称是 **Kria KV260 Vision AI Starter Kit**。它是一套开发套件，使用 **Kria K26 System-on-Module（SOM，系统级模块）**。K26 的核心器件属于 **Zynq UltraScale+ MPSoC（Multiprocessor System-on-Chip，多处理器片上系统）** 系列。

@@ -1,6 +1,22 @@
-# KV260 完整执行流程
+# KV260 SD 卡制作与基础运行环境部署说明
 
-本文只描述从 SD 卡制作到 KV260 启动、Runtime Factory 安装和验收的完整操作。系统架构、Worker、Scheduler 和 FPGA 数据路径见 `KV260_PYNQ_Framework.md`。
+本文面向需要从一张 SD 卡开始部署 KV260 的操作人员，覆盖以下流程：
+
+```text
+SD 卡镜像制作
+      ↓
+Board ID / hostname / 网络配置
+      ↓
+KV260 首次启动
+      ↓
+Runtime Factory
+      ↓
+XRT / ZOCL / pyxrt / PYNQ
+      ↓
+基础 Runtime 验收
+```
+
+本文不展开 Central Server、Session Scheduler、学生 Artifact 管理或业务 Worker API。总体架构见 [`KV260_PYNQ_Framework.md`](KV260_PYNQ_Framework.md)，Central Server 的安装和使用见 [`KV260_Server_Usage_Guide.md`](KV260_Server_Usage_Guide.md)，PYNQ/XRT/Overlay 技术基础见 [`KV260_PYNQ_Architecture_Notes.md`](KV260_PYNQ_Architecture_Notes.md)。
 
 > 写卡会完整覆盖目标设备。每次插入或更换 SD 卡后都必须重新执行 `lsblk`，不能沿用上一次的 `/dev/sdX` 判断。
 
