@@ -3,7 +3,15 @@ from __future__ import annotations
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -44,10 +52,18 @@ class Base(DeclarativeBase):
 
 class Artifact(Base):
     __tablename__ = "artifacts"
+    __table_args__ = (
+        UniqueConstraint("student_id", "version", name="uq_artifacts_student_version"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     student_id: Mapped[str] = mapped_column(String(128), index=True)
-    project_name: Mapped[str] = mapped_column(String(256))
+    # Legacy database compatibility only. Existing V1 SQLite databases have a
+    # NOT NULL project_name column, so new rows fill it internally while the
+    # public API and Artifact business logic no longer expose or use it.
+    legacy_project_name: Mapped[str] = mapped_column(
+        "project_name", String(256), default="legacy"
+    )
     version: Mapped[str] = mapped_column(String(128))
     bit_path: Mapped[str] = mapped_column(Text)
     hwh_path: Mapped[str] = mapped_column(Text)

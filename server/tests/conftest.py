@@ -141,7 +141,7 @@ async def upload(
 ) -> dict[str, Any]:
     response = await client.post(
         "/fpga/artifacts",
-        data={"student_id": student, "project_name": "demo", "version": "v1"},
+        data={"student_id": student},
         files={"bit": (bit_name, bit), "hwh": (hwh_name, hwh)},
     )
     response.raise_for_status()

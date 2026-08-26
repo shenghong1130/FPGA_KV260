@@ -37,7 +37,7 @@ async def upload_artifact(
     hwh = f'<SYSTEM NAME="{project}"><MODULES/></SYSTEM>'.encode()
     response = await client.post(
         f"{base_url}/fpga/artifacts",
-        data={"student_id": student, "project_name": project, "version": "v1"},
+        data={"student_id": student},
         files={
             "bit": ("design.bit", io.BytesIO(bit), "application/octet-stream"),
             "hwh": ("design.hwh", io.BytesIO(hwh), "application/xml"),

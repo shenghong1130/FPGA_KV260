@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 class ArtifactResponse(BaseModel):
     artifact_id: str
     student_id: str
-    project_name: str
     version: str
     status: str
     bit_sha256: str

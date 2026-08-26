@@ -17,7 +17,6 @@ def _response(artifact: Artifact) -> ArtifactResponse:
     return ArtifactResponse(
         artifact_id=artifact.id,
         student_id=artifact.student_id,
-        project_name=artifact.project_name,
         version=artifact.version,
         status=artifact.status.lower(),
         bit_sha256=artifact.bit_sha256,
@@ -32,14 +31,12 @@ def _response(artifact: Artifact) -> ArtifactResponse:
 async def upload_artifact(
     request: Request,
     student_id: str = Form(min_length=1, max_length=128),
-    project_name: str = Form(min_length=1, max_length=256),
-    version: str = Form(min_length=1, max_length=128),
     bit: UploadFile = File(),
     hwh: UploadFile = File(),
 ) -> ArtifactResponse:
     store: ArtifactStore = request.app.state.services.artifact_store
     try:
-        artifact = await store.create(student_id, project_name, version, bit, hwh)
+        artifact = await store.create(student_id, bit, hwh)
     except ArtifactValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
