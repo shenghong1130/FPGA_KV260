@@ -1,396 +1,912 @@
 # 20 × KV260 PYNQ 共享计算平台总体架构
 
-本文定义 20 × KV260 共享 PYNQ 计算平台的总体架构，包括 Central Server、Artifact、Session / Lease、KV260 Worker、PYNQ Overlay 和 FPGA 数据路径。
+## 1. 文档定位与核心设计原则
 
-相关操作文档：
+本文定义 20 × KV260 共享 PYNQ FPGA 计算平台的系统架构，重点描述 Central Server、Student / Client、Artifact、Session / Lease、Scheduler、KV260 Worker 及其状态和故障边界。
 
-- SD 卡制作、板卡初始化和 Runtime Factory：[KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)
-- Central Server 安装、启动和测试：[KV260_Server_Usage_Guide.md](KV260_Server_Usage_Guide.md)
-- PYNQ / XRT / Overlay 基础原理：[KV260_PYNQ_Architecture_Notes.md](KV260_PYNQ_Architecture_Notes.md)
+相关文档：
 
-## 1. 项目目标与当前边界
+- PYNQ / FPGA 技术理论：[KV260_PYNQ_Architecture_Notes.md](KV260_PYNQ_Architecture_Notes.md)
+- SD 卡制作和 Runtime 基础部署：[KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)
+- Central Server 安装、启动、API 使用和测试：[KV260_Server_Usage_Guide.md](KV260_Server_Usage_Guide.md)
 
-平台由一台 Central Server 和最多 20 台 KV260 组成。20 台板卡构成共享资源池，每台 KV260 同一时刻只租给一个 Session，并在该 Session 内串行执行 FPGA 请求。
+平台遵循以下核心原则：
 
-核心原则：
+```text
+Session / Lease 是调度单位，不是单次 predict
 
-- Scheduler 的调度单位是 **Session / Lease**，不是单次 Job；
-- Scheduler 只在 Session 创建或队列分配时选择 Worker；
-- 学生 Artifact 每个 Session 只部署一次；
-- Session 建立后，多次 predict 固定路由到同一块 KV260；
-- 只有主动 release 后，Worker 才重新成为 `IDLE`；
-- 单板 `concurrency = 1`，整个平台最多约 20 个并存的 FPGA Session；
-- 核心计算模型是 PYNQ Overlay + MMIO / AXI DMA，不是 Vitis xclbin kernel scheduler。
+一个 Session 独占一块 KV260
 
-仓库当前已经实现 `server/` 中的 Central Server V1 和 Mock Worker；真实 KV260 业务 Worker 仍属于后续阶段。基础 KV260 Runtime 已经实机验证，不等于业务 Worker 已经实现。
+Artifact 在 Session 初始化时部署一次
 
-## 2. 系统总体架构
+Session 建立后：session_id → worker_id 固定
+
+Session 内：predict many times
+
+predict 不重新调度 Worker
+predict 不重新上传 bit/hwh
+predict 不重新加载 Overlay
+
+predict 完成：BUSY → READY
+不是：        BUSY → IDLE
+
+READY != IDLE
+
+READY = 已被某个 Session 占用，当前可接收该 Session 的下一次 predict
+IDLE  = 没有 Session ownership，可以分配给新 Session
+
+只有 Release 后：Worker → IDLE
+
+单块 KV260：concurrency = 1
+
+Active Session 不透明迁移到其他 Worker
+```
+
+还必须区分：
+
+```text
+Artifact != Session
+Session  != predict
+```
+
+Artifact 是可重复引用的 FPGA 设计资产；Session 是临时资源租约；predict 是 Session 内的一次计算请求。
+
+## 2. 系统整体框架
 
 ```text
                      Student / Client
                            │
-                    Artifact Upload
+                    upload Artifact
                            │
                            ▼
-                  ┌─────────────────┐
-                  │ Artifact Store  │
-                  └────────┬────────┘
+                  ┌──────────────────┐
+                  │  Central Server  │
+                  │                  │
+                  │ Artifact Store   │
+                  │ Session Manager  │
+                  │ Scheduler        │
+                  │ Worker Registry  │
+                  └────────┬─────────┘
                            │
-                    POST /sessions
+                    allocate Session
                            │
-                           ▼
-                  Central Scheduler
-                           │
-                 random IDLE Worker
-                           │
-                 atomic reservation
-                           │
-                           ▼
-                      KV260 Worker
-                           │
-                   deploy Artifact once
-                           │
-                  load PYNQ Overlay
-                           │
-                           ▼
-                      Session READY
-                           │
-               ┌───────────┴───────────┐
-               │                       │
-           predict #1              predict #N
-               │                       │
-               └───────────┬───────────┘
-                           │
-                    同一个 KV260
-                           │
-                     AXI DMA / MMIO
-                           │
-                          FPGA
-                           │
-                       result
-                           │
-                           ▼
-                     Session READY
-                           │
-                    explicit release
-                           │
-                           ▼
-                      Worker IDLE
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+       kv2601           kv2602          ... kv26020
+          │                │                │
+      PYNQ Worker      PYNQ Worker      PYNQ Worker
+          │
+       Overlay
+          │
+      DMA / MMIO
+          │
+         FPGA
+          │
+        Result
 ```
 
-调度发生在 Central Server。单块 KV260 不维护其他板卡状态、全局 Session Queue 或跨板负载均衡。
+Central Server 管理整个集群。Student / Client 只通过 Central Server 使用 FPGA，不直接选择某块 KV260。Scheduler 位于 Central Server；Worker 只维护本板状态，不知道其他 KV260 的状态，也不维护全局 Session Queue。
 
-## 3. Artifact Store
+Central Server 负责控制面，真实 Overlay 加载和 FPGA 计算发生在 KV260 Worker 上。
 
-不同学生可以上传不同的 `design.bit` 和 `design.hwh`。Central Server 将每组文件保存为独立 Artifact，并持久化身份、版本、大小、SHA-256、HWH 解析状态和存储路径。
+## 3. 平台角色与职责边界
+
+| 角色 | 核心职责 |
+| --- | --- |
+| Student / Client | 上传 Artifact、创建 Session、在 Session 内连续 predict、主动 Release |
+| Central Server | 管理 Artifact、Session Queue、Scheduler、Worker Registry、固定路由和持久化状态 |
+| KV260 Worker | 接收 Artifact、管理 Session ownership、加载 Overlay、执行本板 FPGA 计算并返回结果 |
+
+Student / Client 不负责选择具体 `kv260N`、修改 Worker 状态、管理 Session Queue、调用 Overlay、直接操作 DMA / MMIO、管理其他学生或维护 Worker Registry。
+
+Central Server 不负责 FPGA 实际计算、Overlay 内部算法或真实 DMA 数据搬运。
+
+KV260 Worker 不负责全局 Scheduler、全局 Queue、其他 Worker 状态、跨板选择或集群负载均衡。
+
+## 4. Central Server 总体框架
+
+Central Server V1 位于仓库 `server/`，采用 FastAPI + SQLAlchemy + SQLite + httpx + asyncio 构建。
+
+```text
+                  Central Server V1
+                         │
+       ┌─────────────────┼────────────────┐
+       │                 │                │
+       ▼                 ▼                ▼
+ Artifact Store     Session Manager   Worker Registry
+       │                 │                │
+       ▼                 ▼                │
+ local files          Scheduler           │
+       │                 │                │
+       └──────► SQLite ◄──┴────────────────┘
+                         │
+                    WorkerClient
+                         │ HTTP
+       ┌─────────────────┼──────────────────┐
+       ▼                 ▼                  ▼
+    kv2601            kv2602             kv26020
+    :8080             :8080              :8080
+```
+
+当前源码结构：
+
+```text
+server/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── database.py
+│   ├── db_models.py
+│   ├── schemas.py
+│   ├── artifact_store.py
+│   ├── scheduler.py
+│   ├── session_manager.py
+│   ├── worker_registry.py
+│   ├── worker_client.py
+│   └── api/
+│       ├── __init__.py
+│       ├── artifacts.py
+│       ├── sessions.py
+│       ├── workers.py
+│       └── health.py
+├── config/
+│   ├── workers.json
+│   └── workers.mock.json
+├── data/
+├── testbed/
+│   ├── __init__.py
+│   ├── mock_worker.py
+│   ├── run_mock_cluster.py
+│   └── smoke_test.py
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_artifacts.py
+│   ├── test_sessions.py
+│   ├── test_scheduler.py
+│   ├── test_release.py
+│   └── test_concurrency.py
+├── .gitignore
+├── requirements.txt
+└── requirements-dev.txt
+```
+
+模块关系概览：
+
+| 模块 | 作用 |
+| --- | --- |
+| `main.py` | 创建应用，初始化服务并管理 startup/shutdown |
+| `config.py` | 读取环境变量、默认路径和超时配置 |
+| `database.py` / `db_models.py` | 创建数据库连接并定义 Artifact、Session、Worker 模型 |
+| `schemas.py` | 定义 Pydantic 请求和响应模型 |
+| `artifact_store.py` | 校验并保存 bit/hwh，持久化 Artifact metadata |
+| `session_manager.py` | 编排 create、deploy、predict、release 与 Queue allocator |
+| `scheduler.py` | 原子选择 `IDLE` Worker，并查询最早的 `QUEUED` Session |
+| `worker_registry.py` | 同步配置、健康检查、状态维护和启动恢复 |
+| `worker_client.py` | 通过 httpx 调用 Worker HTTP API |
+| `api/` | 暴露 Artifact、Session、Worker 和 health 路由 |
+| `testbed/` | 提供 Mock Worker、Mock Cluster 和 Smoke Test |
+| `tests/` | 提供 pytest 自动化测试 |
+
+## 5. Central Server 职责
+
+### 5.1 Artifact Store
+
+Artifact Store 负责：
+
+- 接收学生上传的 `design.bit` 和 `design.hwh`；
+- 检查扩展名、空文件和上传大小；
+- 分块写入并计算 SHA-256；
+- 对 HWH 执行 XML 基础解析；
+- 在临时 staging 目录完成写入；
+- 生成 `manifest.json` 并执行 atomic move；
+- 在 SQLite 中保存 Artifact metadata 和文件路径。
+
+实际 bit/hwh 和 manifest 存在本地文件系统，SQLite 不保存 bitstream BLOB。
+
+### 5.2 Session Manager
+
+Session Manager 负责：
+
+- 创建 Session；
+- 检查 Artifact 是否存在、是否 `READY`，以及 `student_id` ownership；
+- 协调 Scheduler reservation；
+- 发起 Artifact deploy；
+- 固定路由 predict；
+- 处理 release；
+- 维护 Session 生命周期；
+- 使用 per-session lock 串行化 predict 与 release；
+- 在 Worker 释放后唤醒 Queue allocator。
+
+### 5.3 Scheduler
+
+Scheduler 只负责从真正可分配的 Worker 中选择资源。当前候选条件是：
+
+```text
+Worker.state == IDLE
+并且
+Worker.session_id == NULL
+```
+
+然后使用 `random.choice(idle_workers)` 随机选择一块。allocation lock 将以下过程保护为同一临界区：
+
+```text
+查询 IDLE Worker
+        +
+随机选择 Worker
+        +
+Worker：IDLE → RESERVED
+        +
+Session 绑定 worker_id
+```
+
+因此两个并发 Session 不会同时占用同一块 KV260。Scheduler 只在 Session 创建或 Queue 分配阶段运行，不参与每一次 predict。
+
+### 5.4 Worker Registry
+
+Worker Registry 负责配置同步、Worker 列表、地址、状态、Session ownership、Artifact ownership、健康检查和 Central 启动恢复。主要持久化字段包括 `board`、`base_url`、`state`、`session_id`、`current_artifact_id`、`fpga_ready`、`last_seen` 和 `last_error`。
+
+### 5.5 WorkerClient
+
+WorkerClient 使用 httpx 执行 Central Server 到 KV260 Worker 的异步 HTTP 调用：
+
+```text
+GET  /health
+GET  /status
+POST /internal/deploy
+POST /predict
+POST /internal/release
+```
+
+Central Server 不 import PYNQ、不调用 Overlay，也不操作 FPGA。
+
+## 6. Student / Client 职责
+
+学生正常只做四件事：
+
+```text
+1. 上传自己的 FPGA Artifact
+2. 创建 Session
+3. 在 Session 内连续发送 predict
+4. 不再使用时主动 Release
+```
 
 ```text
 Student
-   ↓
-Artifact
-   ↓
-Session
-   ↓
-Worker
+   │
+   ├── POST /fpga/artifacts
+   │
+   ├── POST /sessions
+   │
+   ├── POST /sessions/{session_id}/predict
+   ├── POST /sessions/{session_id}/predict
+   ├── POST /sessions/{session_id}/predict
+   │
+   └── DELETE /sessions/{session_id}
 ```
 
-Artifact 和 Worker 生命周期解耦：学生不永久绑定某块 KV260，Artifact 也不因一次 Session release 而删除。20 台 KV260 始终属于共享资源池。
-
-上传阶段使用 `multipart/form-data`，并执行大小限制、哈希计算、HWH XML 校验、临时 staging 和原子 rename。用户文件名不直接作为服务端存储路径。
-
-## 4. Central Scheduler 职责
-
-Central Scheduler V1 负责：
-
-- Artifact metadata 与 Artifact Store；
-- Worker Registry 和 Health Check；
-- FIFO Session Queue；
-- Session / Lease 生命周期；
-- 从真正 `IDLE` 的 Worker 中随机选择一块；
-- 原子执行 `IDLE → RESERVED`；
-- 向选中 Worker 部署 Artifact；
-- 持久化 `session_id → worker_id`；
-- 将 predict 固定转发到 Session 所属 Worker；
-- 串行化同一 Session 的 predict 与 release；
-- 处理 release、健康故障和恢复状态。
-
-Scheduler **不会**在每次 predict 时重新选择 Worker。当前分配算法等价于从可用 `IDLE` 集合中执行随机选择，而不是 round-robin、LRU 或 Artifact cache preference。
-
-## 5. Session / Lease 绑定
-
-Session 是学生临时独占一块 KV260 的租约。创建成功后，Central Server 保存：
+学生不需要知道真实 KV260 IP，也不需要自行选择 `kv2607` 或维持永久 HTTP 连接。一次 HTTP 请求结束不等于 Session 结束；真正的绑定关系是：
 
 ```text
-session_id → artifact_id → worker_id
+session_id → worker_id
 ```
 
-Session 不依赖持续不断的 HTTP/TCP 连接。例如：
+只要未 Release，Session 就继续占用该 Worker。
+
+## 7. Artifact 生命周期
+
+每个学生可以拥有自己的 FPGA Artifact。V1 的一个 Artifact 至少包含：
 
 ```text
-10:00 创建 Session
-10:01 predict
-10:05 predict
-10:20 predict
-11:00 predict
-11:30 release
+design.bit
+design.hwh
 ```
 
-这些可以是完全独立的 HTTP 请求。只要 Session 仍为 `READY`，客户端就使用同一个 `session_id` 继续请求同一 Worker。
-
-## 6. KV260 Worker 职责
-
-每台 KV260 是一个独立 Worker Node：
+系统生命周期：
 
 ```text
-Ubuntu 24.04 / Xilinx kernel
-              ↓
-Minimal Kria-PYNQ Runtime
-              ↓
-PYNQ Worker Service
-              ↓
-Session Artifact
-design.bit + design.hwh
-              ↓
-AXI DMA / MMIO / custom IP
-              ↓
-FPGA Accelerator
-              ↓
-result
-```
-
-Worker 负责本板 Session ownership、Artifact 部署、Overlay 初始化、请求校验、FPGA 计算、结果返回和 release。它不负责全局调度、其他 Worker 状态或 Session Queue。
-
-## 7. Worker 内部 FPGA 计算路径
-
-```text
-POST /predict
+Student Upload
       ↓
-PYNQ Worker（Python）
-      ├── MMIO：参数、启动、状态
-      ├── allocate：DMA 可访问 buffer
-      └── AXI DMA：输入/输出搬运
-                   ↓
-           FPGA Accelerator
-                   ↓
-              result buffer
-                   ↓
-              HTTP response
+Central validation
+      ↓
+Artifact Store
+      ↓
+Artifact READY
+      ↓
+未来 Session 引用
 ```
 
-控制路径和数据路径必须分开：MMIO 适合寄存器，DMA 适合图像、tensor 或其他批量数据。Worker 应在可靠的清理路径释放 buffer，并在超时后将硬件置于可判断状态。
+Artifact 长期保存在 Central Server。Session release 不删除 Artifact，Artifact 也不永久绑定某一台 KV260。同一 Artifact 可以被未来多个 Session 引用。
 
-## 8. `design.bit` 与 `design.hwh`
+每个 Session 初始化时，Artifact 只向被选中的 Worker 部署一次；Session 内后续 predict 不再重复部署。
 
-- `design.bit` 配置 PL，决定 FPGA 中实际存在的硬件。
-- `design.hwh` 描述 IP 名称、地址、寄存器、AXI 接口、中断和连接，供 PYNQ 解析。
+## 8. Session / Lease 完整流程
 
-两者必须来自同一次 Vivado build、使用同一 basename，并作为不可拆分的 Artifact。只更新其中一个属于部署错误。
-
-Runtime Factory 的可选硬件验证默认检查 `/opt/fpga/design.bit` 和 `/opt/fpga/design.hwh`。业务平台中的学生 Artifact 则由 Central Server 在 Session 分配后通过 Worker `/internal/deploy` 下发，两者属于不同阶段。
-
-## 9. Overlay 生命周期
-
-当前 Session 模型的 Overlay 生命周期是：
+Session 是对一块 KV260 的资源租约，不是一次 predict，也不是一次 HTTP Request。
 
 ```text
-Worker Service 启动
+Student already has Artifact
+          ↓
+POST /sessions
+          ↓
+创建 Session
+          ↓
+Session → QUEUED
+          ↓
+存在 IDLE Worker？
+      ┌───┴───┐
+      │       │
+     YES      NO
+      │       │
+      │       └── 保持 QUEUED
+      │
+      ▼
+random IDLE Worker
+      ↓
+atomic reservation
+      ↓
+Worker → RESERVED
+Session → RESERVED
+      ↓
+session_id ↔ worker_id
+固定绑定
+      ↓
+DEPLOYING
+      ↓
+Central POST /internal/deploy
+      ↓
+发送 design.bit / design.hwh
+      ↓
+Worker 加载 Overlay
+      ↓
+硬件初始化成功
+      ↓
+Session READY
+Worker READY
+      ↓
+POST /sessions/{id}/predict
+      ↓
+BUSY → FPGA compute → result → READY
+      ↓
+predict → BUSY → READY
+      ↓
+predict → BUSY → READY
+      ↓
+...
+      ↓
+DELETE /sessions/{id}
+      ↓
+RELEASING
+      ↓
+Worker /internal/release
+      ↓
+Session CLOSED
+Worker IDLE
+```
+
+`session_id ↔ worker_id` 的固定绑定从 reservation 开始，在正常 release 前不会改变。
+
+## 9. Session Queue 与 Worker 分配
+
+每个新 Session 先以 `QUEUED` 状态写入 SQLite。如果存在候选 Worker，Scheduler 会立即 reserve；如果所有 Worker 都被占用，Session 保持 `QUEUED`。
+
+当前 Queue 是 FIFO，按照 `created_at` 和 Session ID 选择最早等待项。正常 release 后：
+
+```text
+Worker → IDLE
+       ↓
+allocator_event
+       ↓
+oldest QUEUED Session
+       ↓
+reserve
+       ↓
+deploy
+       ↓
+READY
+```
+
+全局 Queue 排的是 Session，不是 predict。Session `READY` 后的 predict 不重新进入 Scheduler Queue。
+
+## 10. Session 固定路由与并发模型
+
+Session 一旦完成分配：
+
+```text
+sess_A → kv2607
+
+predict #1 → kv2607
+predict #2 → kv2607
+predict #3 → kv2607
+predict #4 → kv2607
+```
+
+不会在每次请求时重新随机选择其他 Worker。predict 路径直接使用：
+
+```text
+session_id
+   ↓
+worker_id
+   ↓
+WorkerClient
+```
+
+同一 Session 的 `concurrency = 1`。Central Server 的 per-session lock 串行化 predict 和 release：
+
+```text
+predict A 正在执行
+      ↓
+release 到达并等待
+      ↓
+predict A 完成
+      ↓
+release 执行
+```
+
+未来真实 Worker 本地也必须提供硬件访问串行保护，防止绕过 Central 的请求并发操作同一套 FPGA 资源。
+
+## 11. KV260 Worker 完整流程
+
+```text
+                    KV260 Worker Service
+                            │
+             ┌──────────────┼──────────────┐
+             │              │              │
+             ▼              ▼              ▼
+         /health         /status      /internal/deploy
+                                           │
+                                           ▼
+                                   接收 Session Artifact
+                                           │
+                                           ▼
+                              校验 session / artifact / hash
+                                           │
+                                           ▼
+                                     load Overlay
+                                           │
+                                           ▼
+                                    初始化 FPGA 资源
+                                           │
+                                           ▼
+                                         READY
+                                           │
+                                           ▼
+                                       /predict
+                                           │
+                                           ▼
+                                validate session ownership
+                                           │
+                                           ▼
+                                     prepare input
+                                           │
+                                           ▼
+                                      DMA / MMIO
+                                           │
+                                           ▼
+                                    FPGA Accelerator
+                                           │
+                                           ▼
+                                      collect result
+                                           │
+                                           ▼
+                                     HTTP response
+                                           │
+                                           ▼
+                                         READY
+                                           │
+                                  可继续下一次 predict
+                                           │
+                                           ▼
+                                  /internal/release
+                                           │
+                                           ▼
+                                  remove ownership
+                                           │
+                                           ▼
+                                          IDLE
+```
+
+Worker 负责管理本板 Session ownership、接收 Artifact、检查部署身份和哈希、加载 Overlay、初始化硬件、验证 predict ownership、执行 FPGA 计算、返回结果、串行访问硬件并处理 release。
+
+Worker 不负责全局 Scheduler、Session Queue、其他 Worker 查询、跨板选择或全局负载均衡。
+
+本节只标明 Overlay、DMA、MMIO 和 `allocate()` 在 Worker 流程中的位置。具体 PYNQ、Overlay、MMIO、DMA、Buffer 和 CMA 原理见 [KV260_PYNQ_Architecture_Notes.md](KV260_PYNQ_Architecture_Notes.md)。
+
+## 12. Overlay 生命周期
+
+```text
+Worker Service Running
         ↓
 Worker IDLE
         ↓
-Session 被分配
-        ↓
-RESERVED
-        ↓
-Central 下发该学生 Artifact
+Session RESERVED
         ↓
 DEPLOYING
         ↓
-加载 design.bit
-解析 design.hwh
-绑定 DMA / MMIO / IP
+receive Artifact
+        ↓
+load Overlay
+        ↓
+hardware initialization
         ↓
 READY
         ↓
 predict → BUSY → READY
         ↓
 predict → BUSY → READY
+        ↓
+...
         ↓
 Session Release
         ↓
 Worker IDLE
 ```
 
-架构硬约束是：
+Overlay 每个 Session 只部署一次。正常路径是：
 
 ```text
-POST /sessions
-      ↓
-deploy Artifact once
-      ↓
-READY
-      ↓
+deploy once
 predict many times
 ```
 
-禁止在每次 predict 中重新上传 bit/hwh 或调用 Overlay download。Release 时可以物理保留最后一个 Overlay；下一名学生的 `/internal/deploy` 会覆盖它。
+禁止在 predict 中重新传输 bit/hwh 或重新调用 Overlay。Release 只解除逻辑 ownership，不要求主动擦空 FPGA；Worker 可以物理保留最后一个 Overlay。下一名学生的 Session 获得该 Worker 后，新的 `/internal/deploy` 会加载新 Artifact 并覆盖旧 Overlay。
 
-## 10. AXI MMIO 与 AXI DMA
+## 13. Session 状态机
 
-MMIO 负责尺寸、模式、启动位和完成状态等控制寄存器；AXI DMA 负责 PS DDR 与 AXI Stream Accelerator 之间的大块数据移动。Worker 必须根据实际 HWH 中的 IP 和接口取得 DMA 对象，不能把示例地址或名称当作通用事实。
-
-DMA 完成条件通常同时涉及发送、接收和 Accelerator 状态。具体顺序由硬件协议决定，必须由真实业务 Worker 与 FPGA design 联调验证。
-
-## 11. Buffer、CMA 与 `allocate`
-
-KV260 的 DMA buffer 来自连续内存。Runtime 默认要求 `CmaTotal >= 256 MiB`，低于 512 MiB 给出容量警告；当前实测约 800 MiB 满足基础验证。
-
-PYNQ 3.1.2 的 `allocate()` 通过 `Device` 和 XRT BO allocator 使用 CMA / PS DDR。Runtime 验收会真实执行 allocate、write、flush、invalidate、readback 和 freebuffer，而不是只验证 import。
-
-实际 Overlay 加载后，HWH 提供的 PS DDR memory topology 可作为默认 allocation target；没有 design 文件时，Runtime Factory 使用 bootstrap PS DDR target 验证相同的 XRT BO 后端，并将 Overlay Hardware Test 明确标记为未运行。
-
-## 12. Session Queue
-
-V1 的全局排队对象是 Session，不是单次 predict：
-
-```text
-POST /sessions
-      ↓
-存在 IDLE Worker？
-  ├── 是：随机选择并原子 RESERVED
-  └── 否：Session → QUEUED
-```
-
-当任意 Session release，Worker 返回 `IDLE`，Scheduler 按 `created_at` 和 ID 的 FIFO 顺序处理等待项：
-
-```text
-QUEUED → RESERVED → DEPLOYING → READY
-```
-
-单个 Session 内的 predict 不重新进入全局 Session Queue，而是在该 Session 的固定 Worker 上串行执行。
-
-## 13. Worker Registry
-
-Registry 至少保存：
-
-| 字段 | 含义 |
-| --- | --- |
-| `worker_id` | `kv2601` … `kv26020` 或 Mock Worker ID |
-| `base_url` | Worker HTTP 地址 |
-| `status` | `IDLE`、`RESERVED`、`DEPLOYING`、`READY`、`BUSY`、`ERROR`、`OFFLINE` |
-| `current_session_id` | 当前占用 Worker 的 Session |
-| `current_artifact_id` | 最近部署的 Artifact |
-| `last_seen` | 最近一次成功健康检查时间 |
-| `failure_count` | 连续健康检查失败次数 |
-
-`READY` 表示 Worker 已被一个 Session 独占，并不表示可分配。健康检查会将可用且无远端 Session 的 Worker 置为 `IDLE`；Scheduler 的候选条件是数据库状态为 `IDLE` 且 `session_id` 为空。
-
-## 14. Worker 状态机
-
-```text
-IDLE
-  ↓
-RESERVED
-  ↓
-DEPLOYING
-  ↓
-READY
-  ↓
-BUSY
-  ↓
-READY
-  ↓
-release process
-  ↓
-IDLE
-```
-
-故障状态为 `ERROR` 和 `OFFLINE`。当前代码的 Worker enum 不单独保存 `RELEASING`，release 过程由 Session 状态和操作锁表达；释放成功后 Worker 才切换为 `IDLE`。
-
-## 15. Session 状态机
+真实 Session 状态为：
 
 ```text
 QUEUED
-  ↓
 RESERVED
-  ↓
 DEPLOYING
-  ↓
 READY
-  ↓
 BUSY
-  ↓
-READY
+RELEASING
+CLOSED
+FAILED
+LOST
+```
+
+正常状态图：
+
+```text
+QUEUED
+   ↓
+RESERVED
+   ↓
+DEPLOYING
+   ↓
+READY ⇄ BUSY
   ↓
 RELEASING
   ↓
 CLOSED
 ```
 
+异常路径：
+
+```text
+DEPLOYING → FAILED
+
+READY / BUSY
+     ↓
+Worker serious failure
+     ↓
+LOST
+```
+
 | 状态 | 含义 |
 | --- | --- |
-| `QUEUED` | 暂无 `IDLE` Worker，等待 FIFO 分配 |
-| `RESERVED` | 已原子占用一个 Worker |
-| `DEPLOYING` | Artifact 正在部署，Overlay 正在初始化 |
-| `READY` | 已独占 Worker，可以发送 predict |
-| `BUSY` | 当前正在执行一次 predict；完成后回到 `READY` |
-| `RELEASING` | 正在解除 Session ownership |
-| `CLOSED` | release 完成，Session 已结束 |
-| `FAILED` | 创建或部署阶段失败 |
-| `LOST` | 活动 Session 因 Worker 严重故障而失去执行资源 |
+| `QUEUED` | 暂无可分配 Worker，等待 FIFO allocator |
+| `RESERVED` | 已原子占用一个 Worker并建立固定绑定 |
+| `DEPLOYING` | 正在向 Worker 部署 Artifact |
+| `READY` | Session 已独占 Worker，可以发送下一次 predict |
+| `BUSY` | 当前正在执行一次 predict |
+| `RELEASING` | 正在通知 Worker 解除 ownership |
+| `CLOSED` | Session 已结束 |
+| `FAILED` | Artifact 部署等 Session 初始化过程失败 |
+| `LOST` | 活动 Worker 严重故障或 ownership 不一致 |
 
-最关键的语义是 `READY != IDLE`。`BUSY → READY` 也不释放 Worker；只有 `DELETE /sessions/{id}` 完成后，Worker 才回到 `IDLE`。
+单次计算完成是 `BUSY → READY`，不是 `BUSY → IDLE`；只有 Session release 才释放 Worker。
 
-## 16. 分配策略与原子性
+## 14. Worker 状态机
 
-当前 V1 使用 `random.choice(idle_workers)` 的语义，从数据库状态为 `IDLE` 且 `session_id` 为空的 Worker 中随机选择一块；健康检查通过更新 Worker 状态将故障节点排除在这个集合外。全局分配锁保证查询候选和 `IDLE → RESERVED` 是一个原子临界区，避免两个并发 Session 占用同一块板。
-
-Round Robin、LRU、Artifact cache preference 或能力分级可以作为未来优化，但不是当前 V1 行为。
-
-## 17. 单板 `concurrency = 1`
-
-一块 KV260 同一时刻只属于一个 Session，同一 Session 内一次只执行一个 FPGA predict。原因是 AXI DMA、MMIO 寄存器、共享 buffer、中断和 Accelerator 状态通常不是多租户资源。
-
-Central Server 使用 per-session lock 串行化 predict 和 release；未来真实 Worker 仍应提供本地串行保护，防止绕过 Central 的请求并发访问硬件。
-
-## 18. 20 板并行模型
-
-如果 20 台健康 Worker 都各自被一个 Session 占用，平台可同时维持约 20 个 FPGA Session；每个 Session 内又能连续执行大量请求。第 21 个 Session 进入 `QUEUED`，直到某个已有 Session release。
-
-因此，平台并行度来自多块物理 FPGA，而不是在单板中让多个 Session 同时操作同一个 DMA/IP。
-
-## 19. Health Check、故障与恢复
-
-Central Server 周期调用 Worker `/health` 和 `/status`，记录 `last_seen` 与连续失败次数。只有健康且 `IDLE` 的 Worker 可以被分配。
-
-Active Session 不做透明 Worker migration。如果 `READY` 或 `BUSY` Worker 严重故障：
+真实 Worker 状态为：
 
 ```text
-Worker  → ERROR / OFFLINE
-Session → FAILED / LOST
+IDLE
+RESERVED
+DEPLOYING
+READY
+BUSY
+ERROR
+OFFLINE
 ```
 
-Central Server 不能偷偷换一块 KV260，因为 Overlay、DMA 状态和 Session ownership 已经绑定原 Worker。学生或客户端需要结束旧 Session，并重新申请新 Session。部署阶段失败也不会把一个已活动 Session 伪装为成功。
-
-## 20. 网络与地址规则
+正常流程：
 
 ```text
-N = 1 ... 20
-hostname = kv260N
-IPv4 = 192.168.31.(81 + N)
-gateway = 192.168.31.1
-DNS = 223.5.5.5, 192.168.31.1
-Worker port = 8080（业务 Worker 规划）
+IDLE
+ ↓
+RESERVED
+ ↓
+DEPLOYING
+ ↓
+READY ⇄ BUSY
+  ↓
+release
+  ↓
+IDLE
 ```
 
-示例：
+异常流程：
 
-| Board ID | Hostname | IPv4 |
-| ---: | --- | --- |
-| 1 | `kv2601` | `192.168.31.82` |
-| 2 | `kv2602` | `192.168.31.83` |
-| 20 | `kv26020` | `192.168.31.101` |
+```text
+DEPLOYING / READY / BUSY → ERROR
 
-完整烧卡和地址表见 [KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)。
+online
+  ↓
+health failure threshold
+  ↓
+OFFLINE
+```
+
+`IDLE` 表示没有 Session ownership，可以被 Scheduler 分配；`READY` 表示已经属于某个 Session，只是当前没有执行 predict。因此 `READY != IDLE`，Scheduler 只能选择 `IDLE` Worker。
+
+当前 Worker enum 没有单独的 `RELEASING`；release 过程由 Session 状态、per-session lock 和 allocation lock 表达。成功后 Worker 进入 `IDLE`，失败时保持不可调度状态。
+
+## 15. Worker Registry 与 Health Check
+
+Worker Registry 当前保存的信息包括：
+
+```text
+board
+base_url
+state
+session_id
+current_artifact_id
+fpga_ready
+last_seen
+last_error
+```
+
+真实 Worker 清单来自 `server/config/workers.json`，地址范围为 `kv2601`（`192.168.31.82:8080`）至 `kv26020`（`192.168.31.101:8080`）。完整 Board ID 和地址规则见 [KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)。
+
+Health Monitor 周期调用：
+
+```text
+GET /health
+GET /status
+```
+
+一次网络失败只增加内存中的连续失败计数，不会立即永久下线。连续失败达到 `HEALTH_FAILURE_THRESHOLD` 后，Worker 进入 `OFFLINE`；如果其当前拥有 Active Session，该 Session 进入 `LOST`。
+
+Worker 返回成功后，Registry 还会比较远端 `session_id` / `artifact_id` 与 SQLite ownership，不能仅凭 `/health` 返回成功就把它视为可分配。
+
+## 16. 故障、Release 与恢复
+
+### 16.1 Artifact deploy 失败
+
+```text
+Session → FAILED
+Worker  → ERROR
+```
+
+失败 Worker 不会被伪装成 `IDLE`。
+
+### 16.2 predict 或 Worker 严重故障
+
+predict 的 Worker HTTP 调用失败时：
+
+```text
+Session → LOST
+Worker  → ERROR
+```
+
+健康检查达到失败阈值时，Worker 进入 `OFFLINE`；若存在 Active Session，该 Session 同样进入 `LOST`。
+
+### 16.3 禁止 Active Session 透明迁移
+
+```text
+sess_A → kv2607
+kv2607 fail
+```
+
+Central 不能自动改成 `sess_A → kv2608`。Overlay、本板状态、DMA 状态和 ownership 已绑定原 Worker。客户端需要放弃旧 Session，并创建新 Session。
+
+### 16.4 正常 Release
+
+```text
+Session READY
+      ↓
+RELEASING
+      ↓
+Worker /internal/release
+      ↓
+Session CLOSED
+Worker IDLE
+```
+
+释放一个仍在 `QUEUED` 的 Session 时，不涉及 Worker，Session 直接进入 `CLOSED`。
+
+### 16.5 Release 失败
+
+如果 `/internal/release` 失败，Session 仍记录为 `CLOSED` 并保存错误信息，但 Worker 进入 `ERROR`，不会假装成为 `IDLE`，因此不能重新调度。
+
+## 17. 数据持久化与 Central 重启恢复
+
+Central Server 使用 SQLite 保存核心 metadata：
+
+```text
+SQLite
+├── Artifact metadata 与文件路径
+├── Worker Registry、ownership 与状态
+└── Session metadata、ownership 与状态
+```
+
+实际 `design.bit`、`design.hwh` 和 `manifest.json` 保存在 Artifact Store 的本地文件系统，不是 SQLite BLOB。
+
+Central 启动流程：
+
+```text
+Central Start
+     ↓
+初始化 SQLite schema
+     ↓
+load workers config
+     ↓
+sync Worker Registry
+     ↓
+读取持久化 Session / Worker ownership
+     ↓
+GET /health
+     ↓
+GET /status
+     ↓
+比较 Central ownership 与 Worker ownership
+```
+
+如果 Active Session 与 Worker 报告的 `session_id` 和 `artifact_id` 一致，恢复流程将双方置为 `READY`，继续使用原绑定。如果不一致，Worker 进入 `ERROR`，对应 Session 进入 `LOST`。如果 Worker 不报告远端 Session且 Central 没有 Active ownership，才可以恢复为 `IDLE`。
+
+Central 重启后绝不能简单把所有 Worker 都设为 `IDLE`，否则可能把仍被某个 Session 占用的 FPGA 再次分配给另一名学生。
+
+## 18. Central / Client / Worker API 边界
+
+Student / Client 到 Central：
+
+```text
+POST   /fpga/artifacts
+GET    /fpga/artifacts
+GET    /fpga/artifacts/{artifact_id}
+
+POST   /sessions
+GET    /sessions/{session_id}
+POST   /sessions/{session_id}/predict
+DELETE /sessions/{session_id}
+
+GET    /workers
+GET    /health
+```
+
+Central 到 Worker：
+
+```text
+GET  /health
+GET  /status
+POST /internal/deploy
+POST /predict
+POST /internal/release
+```
+
+第一组接口属于学生与平台控制面；第二组接口属于 Central 与 Worker 的内部契约。详细请求字段、启动命令和交互测试方式见 [KV260_Server_Usage_Guide.md](KV260_Server_Usage_Guide.md)。
+
+## 19. 20 板共享资源与并行模型
+
+20 台 KV260 是公共 Worker Pool，不是每个学生永久拥有一块板，也不是每次 predict 随机找一块板。
+
+```text
+Student A → Session A → kv2607
+Student B → Session B → kv2603
+```
+
+在 Session A 存续期间，`kv2607` 只属于 Session A；Session B 可以同时在 `kv2603` 上运行。20 台健康 KV260 最多约支持 20 个同时存在的 FPGA Session。
+
+这不是“最多只能执行 20 次 predict”。每个 Session 内都可以持续：
+
+```text
+predict
+predict
+predict
+...
+```
+
+当 20 台 Worker 全部被占用时，第 21 个 Session 进入 `QUEUED`，等待已有 Session release。单块 KV260 同时只有一个 Session、一次一个 FPGA operation；不同板卡之间可以并行。
+
+## 20. 当前实现、测试与后续工作
+
+### 20.1 当前已经实现
+
+Central Server V1 已实现：
+
+- FastAPI REST API；
+- Artifact Store 与 bit/hwh 文件保存；
+- 上传大小限制、SHA-256、HWH XML 基础验证、staging 和 atomic move；
+- SQLite persistence；
+- Session Manager；
+- `random.choice` IDLE Worker selection；
+- asyncio allocation lock；
+- FIFO Session Queue；
+- `session_id → worker_id` 固定路由；
+- per-session predict/release lock；
+- Worker Registry、Health Check 和 Central restart recovery；
+- Mock Worker、pytest 与 Smoke Test；
+- 实机验证通过的 KV260 Minimal PYNQ Runtime。
+
+### 20.2 测试边界
+
+pytest 和 Smoke Test 覆盖 Artifact 校验、原子分配、排除 `READY` Worker、FIFO Queue、release、deploy once、固定 Worker 上连续 predict、并发 Session 创建和 per-session 串行化。
+
+```text
+Mock Worker != 真实 PYNQ Worker
+```
+
+Mock Worker 只验证 Central Server 的接口、调度和状态模型，不执行真实 PYNQ、Overlay、DMA、MMIO 或 FPGA 计算。
+
+### 20.3 两层生命周期
+
+基础设施生命周期：
+
+```text
+SD Card
+   ↓
+Image Factory
+   ↓
+Ubuntu boot
+   ↓
+Runtime Factory
+   ↓
+Runtime Ready
+   ↓
+Worker Service
+   ↓
+Worker IDLE
+```
+
+学生业务生命周期：
+
+```text
+Artifact Upload
+      ↓
+POST /sessions
+      ↓
+Worker allocation
+      ↓
+Artifact deploy
+      ↓
+Overlay Ready
+      ↓
+predict many times
+      ↓
+Release
+      ↓
+Worker IDLE
+```
+
+Image Factory 和 Runtime Factory 建立通用板卡运行环境；Session 才部署具体学生 FPGA 设计。具体 SD 卡和 Runtime 操作见 [KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)。
+
+### 20.4 当前尚未实现
+
+- 真实 KV260 PYNQ Worker；
+- 真实 `/internal/deploy`、Overlay 业务初始化和学生 bit/hwh 运行逻辑；
+- 真实 `/predict`、DMA 输入输出和 MMIO / Accelerator 协议；
+- 不同学生设计的业务接口标准；
+- 身份认证和权限系统；
+- 生产 TLS、Web UI 和高级监控；
+- Redis / Celery 与 HA Scheduler；
+- Active Session 透明迁移。
+
+真实 Worker 是下一阶段。Central Server V1 和基础 Runtime 已经存在，但不能因此宣称真实 FPGA 业务链路已经完成。
 
 ## 21. Runtime Factory
 
@@ -495,164 +1011,112 @@ KV260 filesystem
 | `/opt/fpga` | 默认应用 bit/hwh | 应用文件 |
 | `/lib/modules/<kernel>/updates/dkms/zocl.ko*` | 当前 kernel 的 ZOCL module | DKMS/package 管理 |
 
-## 22. Image Factory
+### 21.3 Central Server V1 目录与模块关系
 
-Image Factory 将 Ubuntu 24.04 镜像写入整盘 SD 卡，并按 Board ID 配置 hostname、静态 IP、gateway、DNS、SSH 与首次启动网络。它不安装 PYNQ Runtime；Runtime Factory 在板卡启动后独立执行。
+Central Server V1 位于仓库 `server/` 目录中，采用 FastAPI + SQLAlchemy + SQLite + httpx + asyncio 构建。
 
-具体命令见 [KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)。
+它负责：
 
-## 23. Central Server 与 Worker API
+- 接收并持久化学生 FPGA Artifact；
+- 管理 Session / Lease 生命周期；
+- 从 `IDLE` Worker 中随机并原子分配 KV260；
+- 将 `design.bit` / `design.hwh` 部署到已分配 Worker；
+- 在整个 Session 生命周期内保持固定 Worker；
+- 转发连续的 `/predict` 请求；
+- 在 Session release 后回收 Worker；
+- 执行 Worker 健康检查并维护故障状态；
+- 提供 Mock Worker、Smoke Test 和 pytest 测试环境。
 
-### 23.1 Central 对学生 / Client
+Central Server 自身不执行 PYNQ Overlay、DMA 或 MMIO。真实 FPGA 计算发生在 KV260 Worker；当前 `testbed/mock_worker.py` 只模拟 Worker 接口和状态，不访问 FPGA。
 
-```text
-POST   /fpga/artifacts
-GET    /fpga/artifacts
-GET    /fpga/artifacts/{artifact_id}
-
-POST   /sessions
-GET    /sessions/{session_id}
-POST   /sessions/{session_id}/predict
-DELETE /sessions/{session_id}
-
-GET    /workers
-GET    /health
-```
-
-完整使用方式见 [KV260_Server_Usage_Guide.md](KV260_Server_Usage_Guide.md)。
-
-### 23.2 Central 对 Worker
+当前目录结构如下。`data/central.db` 与 `data/smoke*.db` 是运行或测试时生成的 SQLite 文件，不属于应用源码：
 
 ```text
-GET  /health
-GET  /status
-POST /internal/deploy
-POST /predict
-POST /internal/release
+server/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── database.py
+│   ├── db_models.py
+│   ├── schemas.py
+│   │
+│   ├── artifact_store.py
+│   ├── scheduler.py
+│   ├── session_manager.py
+│   ├── worker_registry.py
+│   ├── worker_client.py
+│   │
+│   └── api/
+│       ├── __init__.py
+│       ├── artifacts.py
+│       ├── sessions.py
+│       ├── workers.py
+│       └── health.py
+│
+├── config/
+│   ├── workers.json
+│   └── workers.mock.json
+│
+├── data/
+│   ├── .gitkeep
+│   ├── central.db       # 运行时生成
+│   └── smoke*.db        # Smoke Test 生成
+│
+├── testbed/
+│   ├── __init__.py
+│   ├── mock_worker.py
+│   ├── run_mock_cluster.py
+│   └── smoke_test.py
+│
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_artifacts.py
+│   ├── test_sessions.py
+│   ├── test_scheduler.py
+│   ├── test_release.py
+│   └── test_concurrency.py
+│
+├── .gitignore
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
-- `/internal/deploy`：Session 初始化时下发一次 `design.bit`、`design.hwh`、`session_id`、`artifact_id` 与哈希，并等待 Overlay Ready。
-- `/predict`：Session 建立后多次调用，必须核对 `session_id` ownership。
-- `/internal/release`：结束 Worker 的 Session ownership，使其可回到 `IDLE`。
+主要模块关系：
 
-当前 Mock Worker 实现测试契约；真实 KV260 业务 Worker 尚未实现。
-
-## 24. PYNQ Overlay 与 XRT Accelerator 模型
-
-| 维度 | 本项目采用：PYNQ Overlay | 另一模型：Vitis/XRT Accelerator |
+| 路径 | 职责 | 主要关系 |
 | --- | --- | --- |
-| 应用文件 | `design.bit` + `design.hwh` | `xclbin` + 平台 DTBO |
-| 配置入口 | PYNQ `Overlay` / FPGA Manager | XRT application loader |
-| 控制方式 | MMIO、PYNQ IP driver | XRT kernel API / scheduler |
-| 数据路径 | `allocate()` + AXI DMA/MMIO | XRT BO + compute unit |
-| 元数据 | HWH | xclbin metadata |
-| 本项目角色 | 核心路径 | 非核心应用模型 |
+| `app/main.py` | 创建 FastAPI application，组装服务并管理启动/停止生命周期 | 初始化 Database、Artifact Store、Scheduler、Session Manager、Worker Client 与 Worker Registry，并挂载 API router |
+| `app/config.py` | 读取环境变量和默认路径 | 为数据库、Artifact、Worker 配置、超时与文件大小限制提供统一 Settings |
+| `app/database.py` | 创建 SQLAlchemy engine 和 session factory | 初始化 `db_models.py` 定义的 SQLite 表 |
+| `app/db_models.py` | 定义 Artifact、Worker、Session 的持久化模型和状态枚举 | 被 Store、Scheduler、Registry、Session Manager 和 API 查询使用 |
+| `app/schemas.py` | 定义 Pydantic 请求/响应模型 | 约束 Artifact、Session、predict 与 Worker API 数据 |
+| `app/artifact_store.py` | 接收、校验和原子保存 bit/hwh | 计算 SHA-256、解析 HWH XML，并写入 Artifact metadata |
+| `app/scheduler.py` | 执行 Session 资源分配与 FIFO 队列查询 | 在全局 asyncio lock 内随机选择 `IDLE` Worker，并原子执行 reservation |
+| `app/session_manager.py` | 编排 Session / Lease 完整生命周期 | 调用 Scheduler 和 Worker Client，负责 deploy once、固定路由、predict 串行化、release 与排队唤醒 |
+| `app/worker_registry.py` | 同步 Worker 配置、恢复状态并周期健康检查 | 通过 Worker Client 调用 `/health`、`/status`，维护 `IDLE`、`ERROR`、`OFFLINE` 与活动 Session 状态 |
+| `app/worker_client.py` | Central 到 Worker 的异步 HTTP client | 使用 httpx 调用 deploy、predict、release、health 和 status 接口 |
+| `app/api/` | 对外 FastAPI router | 暴露 Artifact、Session、Worker 和 Central health API |
+| `config/workers.json` | 真实 KV260 Worker Registry 初始配置 | 提供 `kv2601` 至 `kv26020` 的地址 |
+| `config/workers.mock.json` | 本地 Mock Cluster 配置 | 提供 loopback Mock Worker 地址 |
+| `testbed/` | 本地集成测试环境 | 提供 Mock Worker launcher 和端到端 Smoke Test |
+| `tests/` | pytest 自动化测试 | 覆盖 Artifact、Session、调度、release、队列和并发行为 |
+| `requirements.txt` | Central Server 运行依赖 | FastAPI、Uvicorn、httpx、SQLAlchemy、Pydantic 和 multipart 支持 |
+| `requirements-dev.txt` | 开发与测试依赖 | 复用运行依赖并增加 pytest、pytest-asyncio |
 
-XRT userspace、pyxrt 和 ZOCL 仍是当前 PYNQ `EmbeddedDevice` 与 allocator 的底层能力，但不应把两种应用模型混为一谈。
-
-本项目采用 PYNQ Overlay，是因为学生硬件以 Vivado bit/hwh 交付，控制路径需要 Python 快速解析 HWH、发现自定义 IP、使用 MMIO 和 AXI DMA。多板调度由 Central Server 完成，无需在单板内部建立 Vitis compute scheduler。
-
-## 25. 两层部署生命周期
-
-### 25.1 基础板卡生命周期
-
-```text
-SD Card
-   ↓
-Image Factory
-   ↓
-首次启动 / cloud-init
-   ↓
-Runtime Factory
-   ↓
-Runtime Ready
-   ↓
-Worker Service
-   ↓
-Worker IDLE
-```
-
-### 25.2 学生 Session 生命周期
+模块调用主路径为：
 
 ```text
-Student Upload Artifact
-          ↓
-Central Artifact Store
-          ↓
-POST /sessions
-          ↓
-随机选择 IDLE KV260
-          ↓
-RESERVED
-          ↓
-deploy student's bit/hwh once
-          ↓
-Overlay Ready
-          ↓
-Session READY
-          ↓
-predict many times
-          ↓
-explicit release
-          ↓
-Worker IDLE
+FastAPI API
+    ↓
+Artifact Store / Session Manager
+                       ↓
+             Scheduler + Worker Registry
+                       ↓
+                  Worker Client
+                       ↓
+              KV260 Worker HTTP API
+                       ↓
+             PYNQ Overlay / DMA / MMIO
 ```
-
-基础 Runtime 生命周期只建立通用板卡能力；学生 Session 生命周期才部署具体业务 Artifact。两者不能混为一个安装流程。
-
-## 26. 当前实现与后续工作
-
-### 26.1 已实现 V1
-
-- Central Server 基础 REST API；
-- Artifact Store、SHA-256 与 HWH 基础校验；
-- SQLite 持久化；
-- Worker Registry 和周期健康检查；
-- Session / Lease Scheduler；
-- 随机 `IDLE` Worker 分配与原子 reservation；
-- FIFO Session Queue；
-- Artifact 每个 Session 部署一次；
-- Session 固定 Worker 路由；
-- per-session predict / release 串行化；
-- 严重故障时不透明迁移；
-- Mock Worker、pytest 与 Smoke Test；
-- KV260 Minimal PYNQ Runtime Factory 实机验证。
-
-### 26.2 尚未实现
-
-- 真实 KV260 PYNQ 业务 Worker；
-- 学生算法对应的真实 `/internal/deploy` 与 `/predict` 协议；
-- 真实 AXI DMA 输入输出和 Accelerator 控制逻辑；
-- 身份认证、权限系统和生产 TLS；
-- Web UI 与高级监控；
-- Redis/Celery、HA Scheduler；
-- Active Session 透明迁移。
-
-## 27. 验收条件
-
-### 27.1 基础 Runtime
-
-- Ubuntu 24.04 Noble、`aarch64`、Xilinx kernel；
-- FPGA Manager `operating`；
-- XRT / xrt-dkms 版本一致；
-- ZOCL、pyxrt、PYNQ DT/runtime 正常；
-- `PYNQ ON_TARGET=True`；
-- `Device=EmbeddedDevice`；
-- `allocate()` 完成功能测试；
-- 重启后服务与 Runtime 仍正常。
-
-### 27.2 Central Server V1
-
-- Artifact 上传、校验和持久化成功；
-- 仅从 `IDLE` Worker 随机分配；
-- 并发 Session 不会重复占用同一 Worker；
-- Artifact 每个 Session 只部署一次；
-- 多次 predict 固定路由到同一 Worker并串行执行；
-- release 后 Worker 回到 `IDLE`；
-- 无空闲 Worker 时 Session FIFO 排队；
-- Worker 严重故障时 Session 明确进入 `FAILED` / `LOST`，不透明迁移；
-- pytest 与 Smoke Test 通过。
-
-### 27.3 真实业务 Worker
-
-该项当前仍是 TODO。完成后还需用真实 bit/hwh 验证 Overlay Load、HWH Parse、IP dictionary、AXI DMA discovery、真实 DMA send/receive 和业务结果正确性，不能用 Mock 测试代替。
