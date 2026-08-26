@@ -18,29 +18,37 @@ class ArtifactResponse(BaseModel):
     created_at: datetime
 
 
-class SessionCreate(BaseModel):
+class PublicPredictRequest(BaseModel):
     student_id: str = Field(min_length=1, max_length=128)
-    artifact_id: str = Field(min_length=1, max_length=64)
+    payload: dict[str, Any]
 
 
-class SessionResponse(BaseModel):
-    session_id: str
+class PredictResponse(BaseModel):
+    request_id: str
     student_id: str
     artifact_id: str
+    version: str
     status: str
-    worker: str | None
-    request_count: int
+    result: dict[str, Any] | None = None
     error: str | None = None
 
 
-class PredictRequest(BaseModel):
-    payload: dict[str, Any]
+class StudentStatusResponse(BaseModel):
+    student_id: str
+    latest_artifact_id: str | None
+    latest_version: str | None
+    lease_state: str
+    worker_assigned: bool
+    queued_requests: int
+    running_requests: int
+    last_activity_at: datetime | None
 
 
 class WorkerResponse(BaseModel):
     board: str
     state: str
-    session_id: str | None
+    lease_id: str | None
+    student_id: str | None
     artifact_id: str | None
     fpga_ready: bool
     last_seen: datetime | None

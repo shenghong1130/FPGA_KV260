@@ -34,7 +34,7 @@ class WorkerClient:
         return await self._json("GET", f"{worker.base_url}/status")
 
     async def deploy(
-        self, worker: Worker, session_id: str, artifact: Artifact
+        self, worker: Worker, lease_id: str, artifact: Artifact
     ) -> dict[str, Any]:
         try:
             with Path(artifact.bit_path).open("rb") as bit_file, Path(
@@ -43,7 +43,7 @@ class WorkerClient:
                 response = await self.http.post(
                     f"{worker.base_url}/internal/deploy",
                     data={
-                        "session_id": session_id,
+                        "lease_id": lease_id,
                         "artifact_id": artifact.id,
                         "bit_sha256": artifact.bit_sha256,
                         "hwh_sha256": artifact.hwh_sha256,
@@ -63,24 +63,24 @@ class WorkerClient:
             raise WorkerClientError(f"worker deploy failed: {exc}") from exc
         if not payload.get("ok") or not payload.get("fpga_ready"):
             raise WorkerClientError(f"worker rejected deployment: {payload}")
-        if payload.get("session_id") != session_id or payload.get("artifact_id") != artifact.id:
+        if payload.get("lease_id") != lease_id or payload.get("artifact_id") != artifact.id:
             raise WorkerClientError("worker deployment identity mismatch")
         return payload
 
     async def predict(
-        self, worker: Worker, session_id: str, payload: dict[str, Any]
+        self, worker: Worker, lease_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         return await self._json(
             "POST",
             f"{worker.base_url}/predict",
-            json={"session_id": session_id, "payload": payload},
+            json={"lease_id": lease_id, "payload": payload},
         )
 
-    async def release(self, worker: Worker, session_id: str) -> dict[str, Any]:
+    async def release(self, worker: Worker, lease_id: str) -> dict[str, Any]:
         return await self._json(
             "POST",
             f"{worker.base_url}/internal/release",
-            json={"session_id": session_id},
+            json={"lease_id": lease_id},
         )
 
     async def _json(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:

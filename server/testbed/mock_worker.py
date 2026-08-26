@@ -15,7 +15,7 @@ from pydantic import BaseModel
 class MockState:
     board: str
     current_artifact_id: str | None = None
-    current_session_id: str | None = None
+    current_lease_id: str | None = None
     fpga_ready: bool = False
     predict_count: int = 0
     deploy_count: int = 0
@@ -25,12 +25,12 @@ class MockState:
 
 
 class PredictBody(BaseModel):
-    session_id: str
+    lease_id: str
     payload: dict[str, Any]
 
 
 class ReleaseBody(BaseModel):
-    session_id: str
+    lease_id: str
 
 
 state = MockState(board=os.getenv("MOCK_BOARD", "mock-kv2601"))
@@ -47,7 +47,7 @@ async def status() -> dict[str, Any]:
     return {
         "board": state.board,
         "fpga_ready": state.fpga_ready,
-        "session_id": state.current_session_id,
+        "lease_id": state.current_lease_id,
         "artifact_id": state.current_artifact_id,
         "predict_count": state.predict_count,
         "deploy_count": state.deploy_count,
@@ -57,7 +57,7 @@ async def status() -> dict[str, Any]:
 
 @app.post("/internal/deploy")
 async def deploy(
-    session_id: str = Form(),
+    lease_id: str = Form(),
     artifact_id: str = Form(),
     bit_sha256: str = Form(),
     hwh_sha256: str = Form(),
@@ -77,18 +77,18 @@ async def deploy(
     except ET.ParseError as exc:
         raise HTTPException(status_code=422, detail=f"invalid HWH XML: {exc}") from exc
     async with state.lock:
-        if state.current_session_id not in (None, session_id):
+        if state.current_lease_id not in (None, lease_id):
             raise HTTPException(status_code=409, detail="worker already leased")
         await asyncio.sleep(float(os.getenv("MOCK_DEPLOY_DELAY", "0.05")))
         state.current_artifact_id = artifact_id
-        state.current_session_id = session_id
+        state.current_lease_id = lease_id
         state.fpga_ready = True
         state.predict_count = 0
         state.deploy_count += 1
     return {
         "ok": True,
         "fpga_ready": True,
-        "session_id": session_id,
+        "lease_id": lease_id,
         "artifact_id": artifact_id,
     }
 
@@ -96,8 +96,8 @@ async def deploy(
 @app.post("/predict")
 async def predict(body: PredictBody) -> dict[str, Any]:
     async with state.lock:
-        if body.session_id != state.current_session_id or not state.fpga_ready:
-            raise HTTPException(status_code=409, detail="session does not own worker")
+        if body.lease_id != state.current_lease_id or not state.fpga_ready:
+            raise HTTPException(status_code=409, detail="lease does not own worker")
         state.active_predicts += 1
         state.max_concurrent_predicts = max(
             state.max_concurrent_predicts, state.active_predicts
@@ -105,15 +105,14 @@ async def predict(body: PredictBody) -> dict[str, Any]:
         state.predict_count += 1
         predict_index = state.predict_count
         artifact_id = state.current_artifact_id
-    try:
-        await asyncio.sleep(float(os.getenv("MOCK_PREDICT_DELAY", "0.15")))
-    finally:
-        async with state.lock:
+        try:
+            await asyncio.sleep(float(os.getenv("MOCK_PREDICT_DELAY", "0.15")))
+        finally:
             state.active_predicts -= 1
     return {
         "ok": True,
         "board": state.board,
-        "session_id": body.session_id,
+        "lease_id": body.lease_id,
         "artifact_id": artifact_id,
         "predict_index": predict_index,
         "input": body.payload,
@@ -123,8 +122,8 @@ async def predict(body: PredictBody) -> dict[str, Any]:
 @app.post("/internal/release")
 async def release(body: ReleaseBody) -> dict[str, Any]:
     async with state.lock:
-        if state.current_session_id not in (None, body.session_id):
-            raise HTTPException(status_code=409, detail="session does not own worker")
-        state.current_session_id = None
+        if state.current_lease_id not in (None, body.lease_id):
+            raise HTTPException(status_code=409, detail="lease does not own worker")
+        state.current_lease_id = None
         state.fpga_ready = False
-    return {"ok": True, "session_id": body.session_id}
+    return {"ok": True, "lease_id": body.lease_id}

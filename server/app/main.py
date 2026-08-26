@@ -7,12 +7,12 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from .api import artifacts, health, sessions, workers
+from .api import artifacts, health, predict, students, workers
 from .artifact_store import ArtifactStore
 from .config import Settings
 from .database import Database
 from .scheduler import Scheduler
-from .session_manager import SessionManager
+from .lease_manager import LeaseManager
 from .worker_client import WorkerClient
 from .worker_registry import WorkerRegistry
 
@@ -30,7 +30,7 @@ class Services:
     worker_client: WorkerClient
     worker_registry: WorkerRegistry
     scheduler: Scheduler
-    session_manager: SessionManager
+    lease_manager: LeaseManager
 
 
 def create_app(
@@ -58,7 +58,7 @@ def create_app(
             selected_settings.health_interval_seconds,
             selected_settings.health_failure_threshold,
         )
-        manager = SessionManager(database.sessions, scheduler, client)
+        manager = LeaseManager(database.sessions, scheduler, client, selected_settings)
         services = Services(
             settings=selected_settings,
             database=database,
@@ -66,10 +66,11 @@ def create_app(
             worker_client=client,
             worker_registry=registry,
             scheduler=scheduler,
-            session_manager=manager,
+            lease_manager=manager,
         )
         app.state.services = services
         await registry.sync_config()
+        await manager.recover_requests()
         await registry.recover()
         manager.start()
         registry.start()
@@ -88,7 +89,8 @@ def create_app(
     )
     application.include_router(health.router)
     application.include_router(artifacts.router)
-    application.include_router(sessions.router)
+    application.include_router(predict.router)
+    application.include_router(students.router)
     application.include_router(workers.router)
     return application
 

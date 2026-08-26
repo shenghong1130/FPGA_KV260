@@ -23,7 +23,9 @@ class Settings:
     worker_deploy_timeout: float
     health_interval_seconds: float
     health_failure_threshold: int
-    session_idle_timeout_seconds: int
+    lease_idle_timeout_seconds: float
+    lease_reclaim_grace_seconds: float
+    lease_reaper_interval_seconds: float
     max_bit_size: int
     max_hwh_size: int
 
@@ -52,8 +54,15 @@ class Settings:
             worker_deploy_timeout=float(os.getenv("WORKER_DEPLOY_TIMEOUT", "120.0")),
             health_interval_seconds=float(os.getenv("HEALTH_INTERVAL_SECONDS", "5.0")),
             health_failure_threshold=int(os.getenv("HEALTH_FAILURE_THRESHOLD", "3")),
-            session_idle_timeout_seconds=int(
-                os.getenv("SESSION_IDLE_TIMEOUT_SECONDS", "0")
+            lease_idle_timeout_seconds=float(os.getenv(
+                "LEASE_IDLE_TIMEOUT_SECONDS",
+                os.getenv("SESSION_IDLE_TIMEOUT_SECONDS", "1800"),
+            )),
+            lease_reclaim_grace_seconds=float(
+                os.getenv("LEASE_RECLAIM_GRACE_SECONDS", "300")
+            ),
+            lease_reaper_interval_seconds=float(
+                os.getenv("LEASE_REAPER_INTERVAL_SECONDS", "10")
             ),
             max_bit_size=int(os.getenv("MAX_BIT_SIZE", str(128 * 1024 * 1024))),
             max_hwh_size=int(os.getenv("MAX_HWH_SIZE", str(16 * 1024 * 1024))),

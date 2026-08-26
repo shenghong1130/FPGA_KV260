@@ -2,54 +2,51 @@ from __future__ import annotations
 
 import pytest
 
-from .conftest import create, upload
+from .conftest import predict, upload
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_session_fixed_worker_and_deploy_once(test_context) -> None:
+async def test_first_predict_allocates_and_deploys(test_context) -> None:
     client, fake = test_context
-    artifact = await upload(client)
-    response = await create(client, "student-a", artifact["artifact_id"])
-    assert response.status_code == 201
-    session = response.json()
-    board = session["worker"]
+    artifact = await upload(client, student="student-a")
+    response = await predict(client, "student-a", 1)
+    body = response.json()
+    assert response.status_code == 200 and body["status"] == "completed"
+    assert body["artifact_id"] == artifact["artifact_id"] and body["version"] == "v1"
+    assert "board" not in body["result"] and "lease_id" not in body["result"]
+    assert len(fake.deploy_counts) == 1
+
+
+async def test_same_student_fixed_worker_and_deploy_once(test_context) -> None:
+    client, fake = test_context
+    await upload(client, student="student-a")
     for value in range(100):
-        prediction = await client.post(
-            f"/sessions/{session['session_id']}/predict",
-            json={"payload": {"value": value}},
-        )
-        assert prediction.status_code == 200
-        body = prediction.json()
-        assert body["board"] == board
-        assert body["session_id"] == session["session_id"]
-        assert body["artifact_id"] == artifact["artifact_id"]
-    assert fake.deploy_counts[session["session_id"]] == 1
-    detail = (await client.get(f"/sessions/{session['session_id']}")).json()
-    assert detail["request_count"] == 100
+        assert (await predict(client, "student-a", value)).status_code == 200
+    owned = [row for row in (await client.get("/workers")).json()
+             if row["student_id"] == "student-a"]
+    assert len(owned) == 1
+    assert list(fake.deploy_counts.values()) == [1]
 
 
-async def test_artifact_ownership(test_context) -> None:
-    client, _ = test_context
-    artifact = await upload(client, student="owner")
-    response = await create(client, "not-owner", artifact["artifact_id"])
-    assert response.status_code == 403
-
-
-async def test_predict_failure_does_not_migrate_session(test_context) -> None:
+async def test_new_artifact_redeploys_on_same_worker(test_context) -> None:
     client, fake = test_context
-    artifact = await upload(client)
-    session = (await create(client, "student-a", artifact["artifact_id"])).json()
-    original_worker = session["worker"]
-    fake.fail_predict_for.add(session["session_id"])
+    first = await upload(client, student="student-a", bit=b"v1")
+    result1 = (await predict(client, "student-a", 1)).json()
+    second = await upload(client, student="student-a", bit=b"v2")
+    result2 = (await predict(client, "student-a", 2)).json()
+    assert first["version"] == "v1" and second["version"] == "v2"
+    assert result2["artifact_id"] == second["artifact_id"]
+    assert list(fake.deploy_counts.values()) == [2]
 
-    response = await client.post(
-        f"/sessions/{session['session_id']}/predict", json={"payload": {"value": 1}}
-    )
-    assert response.status_code == 502
-    detail = (await client.get(f"/sessions/{session['session_id']}")).json()
-    assert detail["status"] == "lost"
-    assert detail["worker"] == original_worker
-    workers = (await client.get("/workers")).json()
-    failed_worker = next(worker for worker in workers if worker["board"] == original_worker)
-    assert failed_worker["state"] == "error"
+
+async def test_no_artifact_and_missing_request_are_404(test_context) -> None:
+    client, _ = test_context
+    assert (await predict(client, "missing")).status_code == 404
+    assert (await client.get("/requests/req_missing")).status_code == 404
+
+
+async def test_old_session_api_removed(test_context) -> None:
+    client, _ = test_context
+    assert (await client.post("/sessions", json={})).status_code == 404
+    assert (await client.get("/sessions/old")).status_code == 404

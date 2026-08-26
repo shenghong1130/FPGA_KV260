@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -34,6 +35,25 @@ class SessionStatus(str, enum.Enum):
     CLOSED = "CLOSED"
     FAILED = "FAILED"
     LOST = "LOST"
+
+
+class LeaseStatus(str, enum.Enum):
+    UNASSIGNED = "UNASSIGNED"
+    QUEUED = "QUEUED"
+    RESERVED = "RESERVED"
+    DEPLOYING = "DEPLOYING"
+    READY = "READY"
+    BUSY = "BUSY"
+    RELEASING = "RELEASING"
+    ERROR = "ERROR"
+    LOST = "LOST"
+
+
+class RequestStatus(str, enum.Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
 
 
 class WorkerState(str, enum.Enum):
@@ -81,7 +101,10 @@ class Worker(Base):
     board: Mapped[str] = mapped_column(String(64), primary_key=True)
     base_url: Mapped[str] = mapped_column(String(512), unique=True)
     state: Mapped[str] = mapped_column(String(32), default=WorkerState.OFFLINE.value)
-    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Legacy SQLite column name; current code treats it only as a lease ID.
+    lease_id: Mapped[str | None] = mapped_column(
+        "session_id", String(64), nullable=True, index=True
+    )
     current_artifact_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     fpga_ready: Mapped[int] = mapped_column(Integer, default=0)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -101,4 +124,37 @@ class SessionRecord(Base):
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     request_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class StudentLease(Base):
+    __tablename__ = "student_leases"
+
+    student_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    lease_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    current_artifact_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PredictRequestRecord(Base):
+    __tablename__ = "predict_requests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    student_id: Mapped[str] = mapped_column(String(128), index=True)
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), index=True)
+    artifact_version: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

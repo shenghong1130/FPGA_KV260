@@ -10,16 +10,24 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .db_models import SessionRecord, SessionStatus, Worker, WorkerState, utcnow
+from .db_models import (
+    LeaseStatus,
+    PredictRequestRecord,
+    RequestStatus,
+    StudentLease,
+    Worker,
+    WorkerState,
+    utcnow,
+)
 from .worker_client import WorkerClient, WorkerClientError
 
 LOGGER = logging.getLogger(__name__)
-ACTIVE_SESSION_STATES = {
-    SessionStatus.RESERVED.value,
-    SessionStatus.DEPLOYING.value,
-    SessionStatus.READY.value,
-    SessionStatus.BUSY.value,
-    SessionStatus.RELEASING.value,
+ACTIVE_LEASE_STATES = {
+    LeaseStatus.RESERVED.value,
+    LeaseStatus.DEPLOYING.value,
+    LeaseStatus.READY.value,
+    LeaseStatus.BUSY.value,
+    LeaseStatus.RELEASING.value,
 }
 
 
@@ -82,7 +90,7 @@ class WorkerRegistry:
                 else:
                     worker.base_url = entry["base_url"]
             for board, worker in existing.items():
-                if board not in configured and worker.session_id is None:
+                if board not in configured and worker.lease_id is None:
                     database.delete(worker)
             database.commit()
 
@@ -112,35 +120,44 @@ class WorkerRegistry:
             self.failures[board] = 0
             worker.last_seen = utcnow()
             worker.last_error = None
-            remote_session = status.get("session_id")
+            remote_lease = status.get("lease_id")
             remote_artifact = status.get("artifact_id")
             active = None
-            if worker.session_id:
-                active = database.get(SessionRecord, worker.session_id)
-            if active and active.status in ACTIVE_SESSION_STATES:
-                if remote_session == active.id and remote_artifact == active.artifact_id:
+            if worker.lease_id:
+                active = database.scalar(select(StudentLease).where(
+                    StudentLease.lease_id == worker.lease_id))
+            if active and active.state in ACTIVE_LEASE_STATES:
+                if not recovery and active.state in {
+                    LeaseStatus.RESERVED.value,
+                    LeaseStatus.DEPLOYING.value,
+                    LeaseStatus.BUSY.value,
+                    LeaseStatus.RELEASING.value,
+                }:
+                    database.commit()
+                    return
+                if remote_lease == active.lease_id and remote_artifact == active.current_artifact_id:
                     worker.fpga_ready = int(bool(status.get("fpga_ready")))
                     # During normal monitoring, health/status must not overwrite
                     # an in-flight RESERVED/DEPLOYING/BUSY transition. Recovery
                     # after a Central restart has no such in-memory operation.
                     if recovery or worker.state == WorkerState.OFFLINE.value:
                         worker.state = WorkerState.READY.value
-                        active.status = SessionStatus.READY.value
+                        active.state = LeaseStatus.READY.value
                 else:
                     worker.state = WorkerState.ERROR.value
-                    worker.last_error = "worker ownership differs from persistent session"
-                    active.status = SessionStatus.LOST.value
+                    worker.last_error = "worker ownership differs from persistent lease"
+                    active.state = LeaseStatus.LOST.value
                     active.error = worker.last_error
-            elif remote_session:
+            elif remote_lease:
                 worker.state = WorkerState.ERROR.value
-                worker.session_id = str(remote_session)
+                worker.lease_id = str(remote_lease)
                 worker.current_artifact_id = (
                     str(remote_artifact) if remote_artifact is not None else None
                 )
                 worker.last_error = "worker reports ownership unknown to Central Server"
             else:
                 worker.state = WorkerState.IDLE.value
-                worker.session_id = None
+                worker.lease_id = None
                 worker.fpga_ready = int(bool(status.get("fpga_ready")))
             database.commit()
 
@@ -150,15 +167,24 @@ class WorkerRegistry:
     ) -> None:
         worker.state = WorkerState.OFFLINE.value
         worker.last_error = error
-        if worker.session_id:
-            active = database.get(SessionRecord, worker.session_id)
-            if active and active.status in ACTIVE_SESSION_STATES:
-                active.status = SessionStatus.LOST.value
+        if worker.lease_id:
+            active = database.scalar(select(StudentLease).where(
+                StudentLease.lease_id == worker.lease_id))
+            if active and active.state in ACTIVE_LEASE_STATES:
+                active.state = LeaseStatus.LOST.value
                 active.error = f"worker {worker.board} offline: {error}"
+                running = database.scalar(select(PredictRequestRecord).where(
+                    PredictRequestRecord.student_id == active.student_id,
+                    PredictRequestRecord.status == RequestStatus.RUNNING.value))
+                if running:
+                    running.status = RequestStatus.FAILED.value
+                    running.error = active.error
+                    running.completed_at = utcnow()
                 LOGGER.error(
-                    "active session lost: session_id=%s artifact_id=%s board=%s",
-                    active.id,
-                    active.artifact_id,
+                    "active lease lost: student_id=%s lease_id=%s artifact_id=%s board=%s",
+                    active.student_id,
+                    active.lease_id,
+                    active.current_artifact_id,
                     worker.board,
                 )
 

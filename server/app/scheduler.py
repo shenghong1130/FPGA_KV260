@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import random
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .db_models import SessionRecord, SessionStatus, Worker, WorkerState
+from .db_models import LeaseStatus, StudentLease, Worker, WorkerState, utcnow
 
 
 class Scheduler:
@@ -14,39 +15,39 @@ class Scheduler:
         self.sessions = sessions
         self.allocation_lock = asyncio.Lock()
 
-    async def reserve(self, session_id: str) -> str | None:
+    async def reserve_lease(self, student_id: str) -> str | None:
         async with self.allocation_lock:
             with self.sessions() as database:
-                session = database.get(SessionRecord, session_id)
-                if session is None or session.status != SessionStatus.QUEUED.value:
+                lease = database.get(StudentLease, student_id)
+                if lease is None or lease.state != LeaseStatus.QUEUED.value:
                     return None
-                candidates = list(
-                    (
-                        database.scalars(
-                            select(Worker).where(
-                                Worker.state == WorkerState.IDLE.value,
-                                Worker.session_id.is_(None),
-                            )
-                        )
-                    ).all()
-                )
+                oldest = database.scalar(select(StudentLease.student_id).where(
+                    StudentLease.state == LeaseStatus.QUEUED.value,
+                ).order_by(StudentLease.queued_at, StudentLease.student_id).limit(1))
+                if oldest != student_id:
+                    return None
+                candidates = list(database.scalars(select(Worker).where(
+                    Worker.state == WorkerState.IDLE.value,
+                    Worker.lease_id.is_(None),
+                )).all())
                 if not candidates:
                     return None
                 worker = random.choice(candidates)
+                lease_id = f"lease_{uuid.uuid4().hex}"
                 worker.state = WorkerState.RESERVED.value
-                worker.session_id = session.id
-                worker.current_artifact_id = session.artifact_id
+                worker.lease_id = lease_id
+                worker.current_artifact_id = None
                 worker.fpga_ready = 0
-                session.worker_id = worker.board
-                session.status = SessionStatus.RESERVED.value
+                lease.lease_id = lease_id
+                lease.worker_id = worker.board
+                lease.state = LeaseStatus.RESERVED.value
+                lease.last_activity_at = utcnow()
+                lease.error = None
                 database.commit()
                 return worker.board
 
-    async def oldest_queued(self) -> str | None:
+    async def oldest_queued_student(self) -> str | None:
         with self.sessions() as database:
-            return database.scalar(
-                select(SessionRecord.id)
-                .where(SessionRecord.status == SessionStatus.QUEUED.value)
-                .order_by(SessionRecord.created_at, SessionRecord.id)
-                .limit(1)
-            )
+            return database.scalar(select(StudentLease.student_id).where(
+                StudentLease.state == LeaseStatus.QUEUED.value,
+            ).order_by(StudentLease.queued_at, StudentLease.student_id).limit(1))
