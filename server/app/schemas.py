@@ -3,10 +3,23 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .datetime_utils import ensure_utc
 
 
-class ArtifactResponse(BaseModel):
+class UtcResponseModel(BaseModel):
+    """Normalize every datetime exposed by a public API response to UTC."""
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def normalize_datetime(cls, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return ensure_utc(value)
+        return value
+
+
+class ArtifactResponse(UtcResponseModel):
     artifact_id: str
     student_id: str
     version: str
@@ -23,7 +36,7 @@ class PublicPredictRequest(BaseModel):
     payload: dict[str, Any]
 
 
-class PredictResponse(BaseModel):
+class PredictResponse(UtcResponseModel):
     request_id: str
     student_id: str
     artifact_id: str
@@ -33,7 +46,7 @@ class PredictResponse(BaseModel):
     error: str | None = None
 
 
-class StudentStatusResponse(BaseModel):
+class StudentStatusResponse(UtcResponseModel):
     student_id: str
     latest_artifact_id: str | None
     latest_version: str | None
@@ -44,7 +57,7 @@ class StudentStatusResponse(BaseModel):
     last_activity_at: datetime | None
 
 
-class WorkerResponse(BaseModel):
+class WorkerResponse(UtcResponseModel):
     board: str
     state: str
     lease_id: str | None
