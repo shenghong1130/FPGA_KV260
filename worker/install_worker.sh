@@ -90,6 +90,29 @@ fi
 PYTHONNOUSERSITE=1 PIP_USER=0 "$PYNQ_VENV/bin/python" -m pip install \
   --upgrade-strategy only-if-needed -r "$SCRIPT_DIR/requirements.txt"
 
+"$PYNQ_VENV/bin/python" -m pip check
+PYTHONNOUSERSITE=1 "$PYNQ_VENV/bin/python" - <<'PY'
+import importlib
+import importlib.metadata
+
+expected = {
+    "pynq": "3.1.2",
+    "pynqmetadata": "0.1.9",
+    "pydantic": "1.10.22",
+    "fastapi": "0.115.13",
+}
+for distribution, required in expected.items():
+    actual = importlib.metadata.version(distribution)
+    if actual != required:
+        raise RuntimeError(
+            f"Worker dependency mismatch: {distribution} "
+            f"expected={required} actual={actual}"
+        )
+    importlib.import_module(distribution)
+    print(f"{distribution}: {actual}")
+print("PYNQ/Worker Python dependency compatibility: OK")
+PY
+
 install -d -m 0755 "$INSTALL_DIR/app"
 install -m 0644 "$SCRIPT_DIR/app/__init__.py" "$INSTALL_DIR/app/__init__.py"
 install -m 0644 "$SCRIPT_DIR/app/main.py" "$INSTALL_DIR/app/main.py"

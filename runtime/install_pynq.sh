@@ -11,6 +11,8 @@ PYNQ_METADATA_VERSION="${PYNQ_METADATA_VERSION:-0.1.9}"
 PYNQ_UTILS_VERSION="${PYNQ_UTILS_VERSION:-0.1.2}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
 PYCPARSER_VERSION="${PYCPARSER_VERSION:-2.22}"
+PYDANTIC_VERSION="${PYDANTIC_VERSION:-1.10.22}"
+FASTAPI_VERSION="${FASTAPI_VERSION:-0.115.13}"
 SETUPTOOLS_VERSION="80.0.0"
 MIN_CMA_MB="${PYNQ_MIN_CMA_MB:-256}"
 OVERLAY_DIR="${PYNQ_OVERLAY_DIR:-/opt/fpga}"
@@ -130,6 +132,11 @@ PY
 
 "$PYNQ_VENV/bin/python" -m pip install --upgrade \
   pip wheel "setuptools==$SETUPTOOLS_VERSION"
+
+# Remove a previously installed Worker pair before the PYNQ dependency pass.
+# This prevents --ignore-installed from leaving both Pydantic 2.x and 1.x
+# dist-info directories behind on an already-provisioned board.
+"$PYNQ_VENV/bin/python" -m pip uninstall -y fastapi pydantic
 "$PYNQ_VENV/bin/python" -m pip install --ignore-installed \
   "numpy==$NUMPY_VERSION" \
   "pynqmetadata==$PYNQ_METADATA_VERSION" \
@@ -147,10 +154,69 @@ PYNQ_REMOTE=1 BOARD=KV260 XILINX_XRT=/usr \
     --upgrade --upgrade-strategy only-if-needed --no-build-isolation --no-cache-dir \
     "pynq==$PYNQ_VERSION" \
     "pycparser==$PYCPARSER_VERSION"
+
+# pynqmetadata 0.1.9 declares an unnecessarily exact pydantic==1.9.1
+# dependency.  That release does not import on Python 3.12, while the
+# compatible Pydantic 1.10 line does.  Apply a narrow, idempotent Noble
+# compatibility correction to the installed distribution metadata so that
+# pip check can validate the real runtime combination rather than the stale
+# upstream pin.  Package code and the pynqmetadata version remain unchanged.
+"$PYNQ_VENV/bin/python" - <<'PY'
+import importlib.metadata
+import pathlib
+
+distribution = importlib.metadata.distribution("pynqmetadata")
+metadata_files = [
+    pathlib.Path(distribution.locate_file(entry))
+    for entry in distribution.files or ()
+    if str(entry).endswith(".dist-info/METADATA")
+]
+if len(metadata_files) != 1:
+    raise RuntimeError(
+        "cannot uniquely locate pynqmetadata METADATA: "
+        f"found {len(metadata_files)} candidates"
+    )
+
+metadata_path = metadata_files[0]
+lines = metadata_path.read_text(encoding="utf-8").splitlines(keepends=True)
+replacement = "Requires-Dist: pydantic (>=1.9.1,<2)\n"
+matching_indexes = [
+    index
+    for index, line in enumerate(lines)
+    if line.lower().startswith("requires-dist: pydantic")
+]
+if len(matching_indexes) != 1:
+    raise RuntimeError(
+        "unexpected pynqmetadata pydantic metadata: "
+        f"found {len(matching_indexes)} Requires-Dist entries"
+    )
+
+index = matching_indexes[0]
+if lines[index] != replacement:
+    original = lines[index].rstrip()
+    if "1.9.1" not in original:
+        raise RuntimeError(
+            "refusing to alter unknown pynqmetadata requirement: " + original
+        )
+    lines[index] = replacement
+    metadata_path.write_text("".join(lines), encoding="utf-8")
+    print(f"pynqmetadata compatibility metadata: {original} -> {replacement.rstrip()}")
+else:
+    print("pynqmetadata compatibility metadata: already applied")
+PY
+
+# The Worker shares this venv with PYNQ.  Converge old installations (for
+# example FastAPI 0.141 + Pydantic 2.x) before pip check.  Exact pins keep both
+# fresh and already-provisioned boards on the Python 3.12-compatible 1.x API.
+"$PYNQ_VENV/bin/python" -m pip install \
+  --upgrade --upgrade-strategy only-if-needed \
+  "pydantic==$PYDANTIC_VERSION" \
+  "fastapi==$FASTAPI_VERSION"
 "$PYNQ_VENV/bin/python" -m pip check
 
 "$PYNQ_VENV/bin/python" - "$PYNQ_VENV" "$PYNQ_VERSION" \
-  "$PYNQ_METADATA_VERSION" "$PYNQ_UTILS_VERSION" "$PYCPARSER_VERSION" <<'PY'
+  "$PYNQ_METADATA_VERSION" "$PYNQ_UTILS_VERSION" "$PYCPARSER_VERSION" \
+  "$PYDANTIC_VERSION" "$FASTAPI_VERSION" <<'PY'
 import importlib
 import importlib.metadata
 import pathlib
@@ -163,6 +229,8 @@ expected_versions = {
     "pynqmetadata": sys.argv[3],
     "pynqutils": sys.argv[4],
     "pycparser": sys.argv[5],
+    "pydantic": sys.argv[6],
+    "fastapi": sys.argv[7],
 }
 site_packages = pathlib.Path(sysconfig.get_path("purelib")).resolve()
 if venv not in site_packages.parents:
@@ -182,6 +250,24 @@ for name, expected in expected_versions.items():
 # metadata and `pip check` alone cannot detect its removal in pycparser 3.0.
 importlib.import_module("pycparser.plyparser")
 print("pycparser.plyparser: OK")
+
+# PYNQ 3.1.2/pynqmetadata 0.1.9 require the Pydantic 1.x API.  Import both
+# packages here so metadata-only `pip check` cannot hide an API/runtime issue.
+importlib.import_module("pynqmetadata")
+importlib.import_module("pydantic")
+importlib.import_module("fastapi")
+metadata_requirements = importlib.metadata.requires("pynqmetadata") or []
+pydantic_requirements = [
+    requirement
+    for requirement in metadata_requirements
+    if requirement.lower().startswith("pydantic")
+]
+if pydantic_requirements != ["pydantic (>=1.9.1,<2)"]:
+    raise RuntimeError(
+        "pynqmetadata compatibility metadata is missing or unexpected: "
+        f"{pydantic_requirements}"
+    )
+print("PYNQ/FastAPI/Pydantic compatibility: OK")
 
 for name in ("grpc", "grpc_tools", "nest_asyncio"):
     module_path = pathlib.Path(importlib.import_module(name).__file__).resolve()

@@ -224,7 +224,7 @@ Runtime Factory 只负责建立板卡基础能力：
 [8/8] Final diagnostics and worker runtime report
 ```
 
-它验证 XRT、ZOCL、pyxrt、PYNQ、Device Tree、`EmbeddedDevice` 和 `allocate()`，随后安装并启用 `kv260-worker.service`。Runtime Factory 同时安装 Worker HTTP contract、Overlay 部署能力、Pillow 图像解码依赖和花卉 AXI DMA adapter；Central 仍负责 Artifact、Lease 与 Request。
+它验证 XRT、ZOCL、pyxrt、PYNQ、Device Tree、`EmbeddedDevice` 和 `allocate()`，随后安装并启用 `kv260-worker.service`。Runtime Factory 同时安装 Worker HTTP contract、Overlay 部署能力、Pillow 图像解码依赖和花卉 AXI DMA adapter；Worker 与 PYNQ 共用 `/opt/kv260-pynq` venv，固定 `fastapi==0.115.13` / `pydantic==1.10.22`。安装过程会窄化修正 pynqmetadata 0.1.9 对旧 `pydantic==1.9.1` 的包元数据约束，并以 `pip check` 和实际 import 验证 Python 3.12 运行组合。Central 仍负责 Artifact、Lease 与 Request。
 
 ### 21.1 部署 PC 端仓库布局
 

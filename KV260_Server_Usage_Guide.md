@@ -27,7 +27,7 @@ python -m pip install -r requirements-dev.txt
 默认读取 `config/workers.json`：
 
 ```bash
-cd <repo>/server
+cd ~/kv260/server
 source .venv/bin/activate
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
