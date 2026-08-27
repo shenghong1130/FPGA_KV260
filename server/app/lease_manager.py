@@ -160,35 +160,72 @@ class LeaseManager:
             LOGGER.info("worker reserved: student_id=%s board=%s", student_id, worker_id)
         await self._drain_locked(student_id)
 
-    async def _deploy(self, database: Session, lease: StudentLease,
-                      worker: Worker, artifact: Artifact) -> bool:
-        if (lease.current_artifact_id == artifact.id and
-                worker.current_artifact_id == artifact.id and
-                worker.state in {WorkerState.READY.value, WorkerState.BUSY.value}):
-            return True
-        lease.state = LeaseStatus.DEPLOYING.value
-        worker.state = WorkerState.DEPLOYING.value
-        database.commit()
-        try:
-            await self.client.deploy(worker, lease.lease_id or "", artifact)
-        except WorkerClientError as exc:
-            self._queue(lease)
-            lease.error = str(exc)
-            worker.state = WorkerState.ERROR.value
-            worker.last_error = str(exc)
+    async def _deploy(self, student_id: str, request_id: str) -> bool:
+        # Snapshot and publish DEPLOYING in a short transaction.
+        with self.sessions() as database:
+            lease = database.get(StudentLease, student_id)
+            record = database.get(PredictRequestRecord, request_id)
+            if (lease is None or record is None or not lease.worker_id or
+                    not lease.lease_id):
+                return False
+            worker = database.get(Worker, lease.worker_id)
+            artifact = database.get(Artifact, record.artifact_id)
+            if worker is None or artifact is None or worker.lease_id != lease.lease_id:
+                lease.state = LeaseStatus.LOST.value
+                lease.error = "worker ownership or artifact unavailable"
+                database.commit()
+                return False
+            if (lease.current_artifact_id == artifact.id and
+                    worker.current_artifact_id == artifact.id and
+                    worker.state in {WorkerState.READY.value, WorkerState.BUSY.value}):
+                return True
+            lease_id = lease.lease_id
+            worker_board = worker.board
+            worker_base_url = worker.base_url
+            artifact_id = artifact.id
+            lease.state = LeaseStatus.DEPLOYING.value
+            worker.state = WorkerState.DEPLOYING.value
             database.commit()
+
+        # No SQLAlchemy Session is open during the potentially 120-second
+        # Worker deployment request.
+        try:
+            await self.client.deploy(worker, lease_id, artifact)
+        except WorkerClientError as exc:
+            with self.sessions() as database:
+                lease = database.get(StudentLease, student_id)
+                worker = database.get(Worker, worker_board)
+                if (lease is not None and worker is not None and
+                        lease.lease_id == lease_id and worker.lease_id == lease_id and
+                        lease.state == LeaseStatus.DEPLOYING.value):
+                    self._queue(lease)
+                    lease.error = str(exc)
+                    worker.state = WorkerState.ERROR.value
+                    worker.last_error = str(exc)
+                    database.commit()
             self.allocator_event.set()
             return False
-        lease.current_artifact_id = artifact.id
-        lease.state = LeaseStatus.READY.value
-        lease.activated_at = lease.activated_at or utcnow()
-        lease.last_activity_at = utcnow()
-        worker.current_artifact_id = artifact.id
-        worker.state = WorkerState.READY.value
-        worker.fpga_ready = 1
-        worker.last_error = None
-        database.commit()
-        return True
+
+        # Reconcile using fresh state so a stale network result cannot revive a
+        # Lease that became LOST/OFFLINE while deployment was in flight.
+        with self.sessions() as database:
+            lease = database.get(StudentLease, student_id)
+            worker = database.get(Worker, worker_board)
+            if (lease is None or worker is None or lease.lease_id != lease_id or
+                    worker.lease_id != lease_id or
+                    worker.base_url != worker_base_url or
+                    lease.state != LeaseStatus.DEPLOYING.value):
+                return False
+            lease.current_artifact_id = artifact_id
+            lease.state = LeaseStatus.READY.value
+            lease.activated_at = lease.activated_at or utcnow()
+            lease.last_activity_at = utcnow()
+            worker.current_artifact_id = artifact_id
+            worker.state = WorkerState.READY.value
+            worker.fpga_ready = 1
+            worker.last_error = None
+            database.commit()
+            return True
 
     async def _drain_locked(self, student_id: str) -> None:
         while True:
@@ -211,17 +248,46 @@ class LeaseManager:
                     lease.error = "worker ownership or artifact unavailable"
                     database.commit()
                     return
-                if not await self._deploy(database, lease, worker, artifact):
+                request_id = record.id
+
+            if not await self._deploy(student_id, request_id):
+                return
+
+            # Mark RUNNING and take the Worker/payload snapshot, then close the
+            # transaction before waiting for FPGA execution.
+            with self.sessions() as database:
+                lease = database.get(StudentLease, student_id)
+                record = database.get(PredictRequestRecord, request_id)
+                if (lease is None or record is None or not lease.worker_id or
+                        not lease.lease_id or record.status != RequestStatus.QUEUED.value):
                     return
+                worker = database.get(Worker, lease.worker_id)
+                if (worker is None or worker.lease_id != lease.lease_id or
+                        worker.state != WorkerState.READY.value or
+                        lease.state != LeaseStatus.READY.value):
+                    return
+                lease_id = lease.lease_id
+                worker_board = worker.board
+                worker_base_url = worker.base_url
+                request_payload = dict(record.payload)
                 record.status = RequestStatus.RUNNING.value
                 record.started_at = utcnow()
                 lease.state = LeaseStatus.BUSY.value
                 lease.last_activity_at = utcnow()
                 worker.state = WorkerState.BUSY.value
                 database.commit()
-                try:
-                    result = await self.client.predict(worker, lease.lease_id, record.payload)
-                except WorkerClientError as exc:
+
+            try:
+                result = await self.client.predict(worker, lease_id, request_payload)
+            except WorkerClientError as exc:
+                with self.sessions() as database:
+                    lease = database.get(StudentLease, student_id)
+                    worker = database.get(Worker, worker_board)
+                    record = database.get(PredictRequestRecord, request_id)
+                    if (lease is None or worker is None or record is None or
+                            lease.lease_id != lease_id or worker.lease_id != lease_id or
+                            record.status != RequestStatus.RUNNING.value):
+                        return
                     record.status = RequestStatus.FAILED.value
                     record.error = str(exc)
                     record.completed_at = utcnow()
@@ -230,7 +296,18 @@ class LeaseManager:
                     worker.state = WorkerState.ERROR.value
                     worker.last_error = str(exc)
                     database.commit()
-                    self.allocator_event.set()
+                self.allocator_event.set()
+                return
+
+            with self.sessions() as database:
+                lease = database.get(StudentLease, student_id)
+                worker = database.get(Worker, worker_board)
+                record = database.get(PredictRequestRecord, request_id)
+                if (lease is None or worker is None or record is None or
+                        lease.lease_id != lease_id or worker.lease_id != lease_id or
+                        worker.base_url != worker_base_url or
+                        lease.state != LeaseStatus.BUSY.value or
+                        record.status != RequestStatus.RUNNING.value):
                     return
                 # Worker ownership and board identity are internal details.
                 record.result = {
@@ -265,6 +342,8 @@ class LeaseManager:
             return await self._release_locked(student_id, reason)
 
     async def _release_locked(self, student_id: str, reason: str) -> bool:
+        # Publish RELEASING while holding the existing lock order, then close
+        # the database Session before the Worker HTTP request.
         async with self.scheduler.allocation_lock:
             with self.sessions() as database:
                 lease = database.get(StudentLease, student_id)
@@ -279,16 +358,37 @@ class LeaseManager:
                 worker = database.get(Worker, lease.worker_id)
                 if pending or worker is None or worker.state != WorkerState.READY.value:
                     return False
+                lease_id = lease.lease_id
+                worker_board = worker.board
+                worker_base_url = worker.base_url
                 lease.state = LeaseStatus.RELEASING.value
                 database.commit()
-                try:
-                    await self.client.release(worker, lease.lease_id)
-                except WorkerClientError as exc:
+
+        try:
+            await self.client.release(worker, lease_id)
+        except WorkerClientError as exc:
+            async with self.scheduler.allocation_lock:
+                with self.sessions() as database:
+                    lease = database.get(StudentLease, student_id)
+                    worker = database.get(Worker, worker_board)
+                    if (lease is None or worker is None or lease.lease_id != lease_id or
+                            worker.lease_id != lease_id):
+                        return False
                     lease.state = LeaseStatus.ERROR.value
                     lease.error = str(exc)
                     worker.state = WorkerState.ERROR.value
                     worker.last_error = str(exc)
                     database.commit()
+            return False
+
+        async with self.scheduler.allocation_lock:
+            with self.sessions() as database:
+                lease = database.get(StudentLease, student_id)
+                worker = database.get(Worker, worker_board)
+                if (lease is None or worker is None or lease.lease_id != lease_id or
+                        worker.lease_id != lease_id or
+                        worker.base_url != worker_base_url or
+                        lease.state != LeaseStatus.RELEASING.value):
                     return False
                 worker.state = WorkerState.IDLE.value
                 worker.lease_id = None

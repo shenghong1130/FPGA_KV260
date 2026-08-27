@@ -11,8 +11,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .fpga import (
+    FpgaExecutionError,
     FpgaBackendProtocol,
-    PredictAdapterNotConfigured,
+    PredictPayloadError,
     PynqFpgaBackend,
 )
 from .state import WorkerConflictError, WorkerState, WorkerValidationError
@@ -104,8 +105,10 @@ def create_app(
             return await state.predict(body.lease_id, body.payload)
         except WorkerConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except PredictAdapterNotConfigured as exc:
-            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except PredictPayloadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FpgaExecutionError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @application.post("/internal/release")
     async def release(body: ReleaseBody) -> dict[str, Any]:

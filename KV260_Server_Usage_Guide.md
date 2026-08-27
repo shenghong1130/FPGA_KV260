@@ -4,7 +4,7 @@
 
 本文只介绍 Central Server 的安装、启动、Sessionless HTTP API、Mock Cluster 和测试方法。总体架构见 [KV260_PYNQ_Framework.md](KV260_PYNQ_Framework.md)，PYNQ/FPGA 原理见 [KV260_PYNQ_Architecture_Notes.md](KV260_PYNQ_Architecture_Notes.md)，板卡部署见 [KV260_SD_Card_Setup_Guide.md](KV260_SD_Card_Setup_Guide.md)。
 
-Central Server V1、Mock Worker 和真实 KV260 Worker HTTP 服务均已实现。真实 Worker 可以完成健康检查、ownership、Artifact 校验和 PYNQ Overlay 部署；应用专用 DMA/MMIO predict adapter 仍是下一阶段。V1 依靠 asyncio lock 保证调度原子性，只能使用单 Uvicorn process。
+Central Server V1、Mock Worker 和真实 KV260 Worker HTTP 服务均已实现。真实 Worker 可以完成 Artifact 校验、PYNQ Overlay 部署以及已验证花卉分类 ABI 的 AXI DMA 推理。V1 依靠 asyncio lock 保证调度原子性，只能使用单 Uvicorn process。
 
 ## 2. 安装开发环境
 
@@ -126,6 +126,32 @@ curl http://127.0.0.1:8000/fpga/artifacts/art_xxxxx
 
 ### 4.4 提交计算：Student → Central
 
+花卉图像分类使用 `multipart/form-data`：
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -F student_id=student01 \
+  -F image=@flower.jpg
+```
+
+`image` 只接受 JPEG/PNG，默认上限 8 MiB。Central 将图像编码为内部 payload 后转发给已绑定 Worker；公开结果不回传 base64 图像。典型分类结果为：
+
+```json
+{
+  "ok": true,
+  "status": "success",
+  "predicted_class": "meiguihua",
+  "flower": "meiguihua",
+  "flower_api": "meiguihua",
+  "flower_cn": "玫瑰花",
+  "raw_class": "玫瑰花",
+  "class_index": 6,
+  "confidence": 1.234
+}
+```
+
+为保持现有通用调用兼容，JSON 格式仍可用：
+
 ```bash
 curl -X POST http://127.0.0.1:8000/predict \
   -H 'Content-Type: application/json' \
@@ -144,7 +170,7 @@ Central 自动选择该学生提交时的最新 Artifact，并生成 `request_id
   "status": "completed",
   "artifact_id": "art_xxxxx",
   "version": "v3",
-  "result": {"value": 456},
+  "result": {"status": "success", "flower_api": "meiguihua", "flower_cn": "玫瑰花"},
   "error": null
 }
 ```
@@ -231,7 +257,7 @@ curl -s http://127.0.0.1:8000/health | python3 -m json.tool
 | `POST /predict` | 执行一次计算 |
 | `POST /internal/release` | 解除 Lease ownership |
 
-这些接口只由 Central 调用。真实 Worker 会校验并加载 PYNQ Overlay；在应用专用 predict adapter 尚未配置时，`POST /predict` 明确返回 `501 FPGA predict adapter not configured`，不会伪造 FPGA 结果。Mock 实现相同 contract，但不执行 PYNQ、Overlay、DMA 或 MMIO。
+这些接口只由 Central 调用。真实 Worker 会校验并加载 PYNQ Overlay，将图像预处理为 `(3, 28, 28)` `float32` 并通过 `axi_dma_0` 完成 12 类花卉推理。Mock 实现相同 contract，对图像 payload 返回固定分类结果，但不执行 PYNQ、Overlay、DMA 或 MMIO。
 
 ## 5. 学生完整使用示例
 
@@ -244,8 +270,8 @@ curl -X POST "$CENTRAL/fpga/artifacts" \
   -F hwh=@design.hwh
 
 curl -X POST "$CENTRAL/predict" \
-  -H 'Content-Type: application/json' \
-  -d '{"student_id":"student01","payload":{"value":123}}'
+  -F student_id=student01 \
+  -F image=@flower.jpg
 ```
 
 若响应是 `completed`，直接读取 `result`；若为 `queued`，复制 `request_id` 并查询：
@@ -342,8 +368,15 @@ pytest 是自动化服务测试；Mock Cluster + smoke_test 是完整 HTTP 集�
 | `LEASE_REAPER_INTERVAL_SECONDS` | `10` | Reaper 周期 |
 | `MAX_BIT_SIZE` | `134217728` | bit 上限 |
 | `MAX_HWH_SIZE` | `16777216` | hwh 上限 |
+| `MAX_PREDICT_IMAGE_SIZE` | `8388608` | predict JPEG/PNG 上限 |
 
 未设置新 idle 变量时，代码临时读取旧 `SESSION_IDLE_TIMEOUT_SECONDS` 作为兼容 fallback；新部署只使用 `LEASE_IDLE_TIMEOUT_SECONDS`。
+
+Worker Health Monitor 默认每 5 秒并发检查一轮。即使部分 Worker 处于 `OFFLINE`、timeout 或 unreachable，`/health`、`/workers` 和 `/ui/` 也应快速响应；`HEALTH_INTERVAL_SECONDS=3600` 只能用于诊断，不是正式 workaround。Dashboard 显示 Central Offline 时先执行：
+
+```bash
+curl --max-time 5 http://127.0.0.1:8000/health
+```
 
 ## 9. 常见使用问题
 

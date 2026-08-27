@@ -97,27 +97,46 @@ class WorkerRegistry:
     async def recover(self) -> None:
         with self.sessions() as database:
             boards = [worker.board for worker in database.scalars(select(Worker)).all()]
-        for board in boards:
-            await self._check_worker(board, recovery=True)
+        await asyncio.gather(
+            *(self._check_worker(board, recovery=True) for board in boards)
+        )
 
     async def _check_worker(self, board: str, recovery: bool = False) -> None:
+        # Phase A: take only the endpoint snapshot needed by the HTTP client.
+        # The detached object prevents a SQLAlchemy Session/transaction from
+        # remaining open across either network await below.
         with self.sessions() as database:
             worker = database.get(Worker, board)
             if worker is None:
                 return
-            try:
-                health = await self.client.health(worker)
-                if not health.get("ok"):
-                    raise WorkerClientError(f"unhealthy response: {health}")
-                status = await self.client.status(worker)
-            except WorkerClientError as exc:
-                self.failures[board] += 1
-                if recovery or self.failures[board] >= self.failure_threshold:
-                    await self._mark_offline(database, worker, str(exc))
-                    database.commit()
-                return
+            endpoint = Worker(board=worker.board, base_url=worker.base_url)
 
-            self.failures[board] = 0
+        # Phase B: no database Session is open while waiting for Worker I/O.
+        try:
+            health = await self.client.health(endpoint)
+            if not health.get("ok"):
+                raise WorkerClientError(f"unhealthy response: {health}")
+            status = await self.client.status(endpoint)
+        except WorkerClientError as exc:
+            self.failures[board] += 1
+            if not recovery and self.failures[board] < self.failure_threshold:
+                return
+            # Phase C (failure): reopen and reconcile against current state.
+            with self.sessions() as database:
+                worker = database.get(Worker, board)
+                if worker is None or worker.base_url != endpoint.base_url:
+                    return
+                self._mark_offline(database, worker, str(exc))
+                database.commit()
+            return
+
+        self.failures[board] = 0
+        # Phase C (success): fetch fresh persistent state. A Scheduler may have
+        # changed IDLE to RESERVED/DEPLOYING/BUSY while HTTP was in flight.
+        with self.sessions() as database:
+            worker = database.get(Worker, board)
+            if worker is None or worker.base_url != endpoint.base_url:
+                return
             worker.last_seen = utcnow()
             worker.last_error = None
             remote_lease = status.get("lease_id")
@@ -162,9 +181,7 @@ class WorkerRegistry:
             database.commit()
 
     @staticmethod
-    async def _mark_offline(
-        database: Session, worker: Worker, error: str
-    ) -> None:
+    def _mark_offline(database: Session, worker: Worker, error: str) -> None:
         worker.state = WorkerState.OFFLINE.value
         worker.last_error = error
         if worker.lease_id:
@@ -197,10 +214,17 @@ class WorkerRegistry:
                         worker.board
                         for worker in database.scalars(select(Worker)).all()
                     ]
-                await asyncio.gather(
+                results = await asyncio.gather(
                     *(self._check_worker(board) for board in boards),
-                    return_exceptions=False,
+                    return_exceptions=True,
                 )
+                for board, result in zip(boards, results, strict=True):
+                    if isinstance(result, Exception):
+                        LOGGER.error(
+                            "worker monitor check failed: board=%s error=%s",
+                            board,
+                            result,
+                        )
         except asyncio.CancelledError:
             raise
 

@@ -349,7 +349,7 @@ sudo env \
 Overlay Hardware Test: NOT RUN (design files unavailable)
 ```
 
-这是正常状态：Minimal Runtime 已通过，只是尚未验证具体 FPGA design。真实 DMA send/receive 必须由符合应用硬件协议的测试程序验证。
+这是正常状态：Minimal Runtime 已通过，只是尚未验证具体 FPGA design。当前花卉分类 Worker 的真实 DMA 验收还需通过 Central `POST /predict` 上传 JPEG/PNG，确认 `axi_dma_0` 完成输入/输出且返回 12 类之一。
 
 # 附录 A：Runtime Factory 安装内容
 
@@ -456,7 +456,7 @@ iproute2
 linux-headers-<Xilinx kernel>
 ```
 
-其中 `software-properties-common` 只在缺少 `add-apt-repository` 时安装；kernel headers 只在对应 kernel build tree 缺失时安装。Worker 还在现有 `/opt/kv260-pynq` venv 中安装 FastAPI、Uvicorn、Pydantic 和 python-multipart，不创建第二套 PYNQ。
+其中 `software-properties-common` 只在缺少 `add-apt-repository` 时安装；kernel headers 只在对应 kernel build tree 缺失时安装。Worker 还在现有 `/opt/kv260-pynq` venv 中安装 FastAPI、Uvicorn、Pydantic、python-multipart 和 Pillow，不创建第二套 PYNQ，也不升级 PYNQ Runtime 已固定的 NumPy。
 
 ## A.6 明确没有安装什么
 

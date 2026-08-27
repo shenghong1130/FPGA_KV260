@@ -468,6 +468,19 @@ DDR
 
 DMA 的主要任务不是计算，而是数据搬运；真正的计算仍由 FPGA Accelerator 完成。
 
+### 13.1 当前花卉分类设计的 DMA ABI
+
+当前 Worker 要求 HWH 暴露 Simple DMA `axi_dma_0`。JPEG/PNG 解码为 RGB 后 resize 到 `28×28`，转为 CHW 并做逐通道 z-score；常量通道置零。输入 Buffer 为 `(3,28,28)` `float32`（9408 bytes），输出 Buffer 为 `(12,)` `float32`（48 bytes）。
+
+```text
+recv.transfer(output)
+send.transfer(input)
+send.wait()
+recv.wait()
+```
+
+CPU 写完输入后执行 `flush()`，DMA 写完输出后执行 `invalidate()`。返回类别由 12 个原始输出的 `argmax` 决定，当前 ABI 不在 CPU 端执行 softmax。
+
 例如，CNN 输入图片可能包含大量像素。如果通过 MMIO 一个像素一个像素写入，效率通常很低。因此应区分：
 
 ```text

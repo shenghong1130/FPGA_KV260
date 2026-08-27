@@ -9,13 +9,12 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from worker.app.fpga import PredictAdapterNotConfigured
+from worker.app.fpga import FpgaExecutionError, PredictPayloadError
 from worker.app.main import create_app, validate_board_hostname
 
 
 class FakeBackend:
-    def __init__(self, predict_configured: bool = True) -> None:
-        self.predict_configured = predict_configured
+    def __init__(self) -> None:
         self.initialized = False
         self.loaded: list[Path] = []
         self.active_predicts = 0
@@ -31,8 +30,10 @@ class FakeBackend:
         self.loaded.append(bit_path)
 
     async def predict(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self.predict_configured:
-            raise PredictAdapterNotConfigured("FPGA predict adapter not configured")
+        if payload.get("invalid"):
+            raise PredictPayloadError("invalid test image")
+        if payload.get("hardware_error"):
+            raise FpgaExecutionError("DMA failed")
         self.active_predicts += 1
         self.max_active_predicts = max(self.max_active_predicts, self.active_predicts)
         try:
@@ -204,8 +205,8 @@ async def test_predict_rejects_owned_but_not_ready_worker(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_predict_adapter_returns_501(tmp_path: Path) -> None:
-    backend = FakeBackend(predict_configured=False)
+async def test_bad_predict_payload_returns_422_without_losing_overlay(tmp_path: Path) -> None:
+    backend = FakeBackend()
     application = create_app(
         board="kv2602", artifact_root=tmp_path / "artifacts", backend=backend
     )
@@ -215,10 +216,11 @@ async def test_unconfigured_predict_adapter_returns_501(tmp_path: Path) -> None:
         ) as client:
             assert (await deploy(client)).status_code == 200
             response = await client.post(
-                "/predict", json={"lease_id": "lease_1", "payload": {"x": 1}}
+                "/predict", json={"lease_id": "lease_1", "payload": {"invalid": True}}
             )
-            assert response.status_code == 501
-            assert response.json()["detail"] == "FPGA predict adapter not configured"
+            assert response.status_code == 422
+            assert response.json()["detail"] == "invalid test image"
+            assert (await client.get("/status")).json()["fpga_ready"] is True
 
 
 @pytest.mark.asyncio
@@ -231,3 +233,16 @@ async def test_predict_calls_are_serialized(worker_context) -> None:
     )
     assert first.status_code == second.status_code == 200
     assert backend.max_active_predicts == 1
+
+
+@pytest.mark.asyncio
+async def test_hardware_predict_failure_returns_500_and_clears_ready(worker_context) -> None:
+    client, _ = worker_context
+    assert (await deploy(client)).status_code == 200
+    response = await client.post(
+        "/predict",
+        json={"lease_id": "lease_1", "payload": {"hardware_error": True}},
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"] == "DMA failed"
+    assert (await client.get("/status")).json()["fpga_ready"] is False

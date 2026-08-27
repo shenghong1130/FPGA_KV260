@@ -28,6 +28,7 @@ class Settings:
     lease_reaper_interval_seconds: float
     max_bit_size: int
     max_hwh_size: int
+    max_predict_image_size: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -66,4 +67,7 @@ class Settings:
             ),
             max_bit_size=int(os.getenv("MAX_BIT_SIZE", str(128 * 1024 * 1024))),
             max_hwh_size=int(os.getenv("MAX_HWH_SIZE", str(16 * 1024 * 1024))),
+            max_predict_image_size=int(
+                os.getenv("MAX_PREDICT_IMAGE_SIZE", str(8 * 1024 * 1024))
+            ),
         )

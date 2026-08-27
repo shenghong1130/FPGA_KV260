@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 import os
 import re
 import shutil
@@ -11,7 +12,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
-from .fpga import FpgaBackendProtocol
+from .fpga import FpgaBackendProtocol, FpgaExecutionError, PredictPayloadError
+
+LOGGER = logging.getLogger(__name__)
 
 
 class WorkerConflictError(RuntimeError):
@@ -88,6 +91,10 @@ class WorkerState:
             )
             final = self.artifact_root / artifact_id
             try:
+                LOGGER.info(
+                    "artifact deployment start: board=%s lease_id=%s artifact_id=%s",
+                    self.board, lease_id, artifact_id,
+                )
                 bit_path = staging / "design.bit"
                 hwh_path = staging / "design.hwh"
                 bit_path.write_bytes(bit_data)
@@ -106,6 +113,10 @@ class WorkerState:
             self.current_lease_id = lease_id
             self.current_artifact_id = artifact_id
             self.fpga_ready = True
+            LOGGER.info(
+                "overlay and DMA ready: board=%s lease_id=%s artifact_id=%s",
+                self.board, lease_id, artifact_id,
+            )
             return {
                 "ok": True,
                 "fpga_ready": True,
@@ -119,7 +130,23 @@ class WorkerState:
         async with self.lock:
             if lease_id != self.current_lease_id or not self.fpga_ready:
                 raise WorkerConflictError("lease does not own a ready worker")
-            return await self.backend.predict(payload)
+            try:
+                LOGGER.info("predict start: board=%s lease_id=%s", self.board, lease_id)
+                result = await self.backend.predict(payload)
+                LOGGER.info("predict complete: board=%s lease_id=%s", self.board, lease_id)
+                return result
+            except PredictPayloadError:
+                # A bad image does not invalidate the loaded Overlay.
+                raise
+            except FpgaExecutionError:
+                self.fpga_ready = False
+                LOGGER.exception(
+                    "FPGA predict failed: board=%s lease_id=%s", self.board, lease_id
+                )
+                raise
+            except Exception:
+                self.fpga_ready = False
+                raise
 
     async def release(self, lease_id: str) -> dict[str, Any]:
         async with self.lock:

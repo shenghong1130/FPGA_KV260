@@ -64,7 +64,7 @@ API → Lease Manager → Scheduler → Worker Client
 
 ### 5.4 Worker Registry
 
-加载 Worker 配置，通过 `/health` 和 `/status` 恢复及监控状态；未知远端 ownership 标记为 `ERROR`，不会误判为 `IDLE`。
+加载 Worker 配置，通过 `/health` 和 `/status` 恢复及监控状态；未知远端 ownership 标记为 `ERROR`，不会误判为 `IDLE`。每轮检查分为短 DB 快照、无 SQLAlchemy Session 的并发 Worker HTTP I/O、以及新 DB Session 状态合并三个阶段；慢板或不可达板不会长时间占用 SQLite transaction 或阻塞 FastAPI。
 
 ### 5.5 WorkerClient
 
@@ -117,6 +117,12 @@ student_id → StudentLease → fixed worker_id
 
 Worker 启动后为 `IDLE`。Central `/internal/deploy` 下发 `lease_id`、Artifact metadata、bit/hwh；Worker加载 Overlay 后进入 `READY`。`/predict` 验证 ownership 后串行计算；`/internal/release` 解除 ownership 并回到 `IDLE`。
 
+### 11.1 Student FPGA Hardware ABI
+
+当 Student 以 multipart 上传 JPEG/PNG 时，Central 将其转为 `image_base64/content_type` 内部 payload。Worker 严格解码后执行 `RGB → 28×28 → HWC-to-CHW → 逐通道 z-score`，常量通道置零。硬件 ABI 固定为 Simple DMA `axi_dma_0`：输入 `(3,28,28)` `float32`/9408 bytes，输出 `(12,)` `float32`/48 bytes。DMA 顺序为 `recv.transfer → send.transfer → send.wait → recv.wait`，输入 `flush()`，输出 `invalidate()`，最终使用 `argmax`，不做 softmax。
+
+学生提交的 `design.bit/design.hwh` 必须来自同一次 build，并严格符合上述 ABI。Python Worker 不猜测 IP 名称、tensor layout 或输出语义；不符合时 deploy 或 predict 明确失败。单 Worker hardware concurrency 为 1，Overlay 遵循 deploy once、predict many。
+
 ## 12. Overlay 生命周期
 
 Overlay 不随每次 predict 重载。正常路径是 deploy once → predict many；只有当前 Request 固定的 Artifact 与 Worker 已加载 Artifact 不同才重新 deploy。Release 不要求擦除 PL，下一次 deploy 会覆盖旧设计。
@@ -145,6 +151,8 @@ Scheduler 只选择 `state=IDLE` 且 `lease_id=None` 的 Worker。
 ## 15. Worker Registry 与 Health Check
 
 Registry 周期检查 `/health` 和 `/status`，核对 `lease_id/artifact_id/fpga_ready`。活动 ownership 一致时恢复 `READY`；远端报告未知 Lease 时标记 `ERROR`。管理员通过 `/workers` 查看具体板卡与 Student ownership。
+
+20 块 Worker 的 HTTP 检查并发执行。合并远端结果时必须重读最新持久化状态；普通 monitor 不得用旧 `/status` 结果覆盖 `RESERVED/DEPLOYING/BUSY/RELEASING` 过渡。
 
 ## 16. 故障、自动回收与恢复
 
@@ -184,7 +192,7 @@ Central → Worker：`GET /health`、`GET /status`、`POST /internal/deploy`、`
 
 ### 20.1 当前已经实现
 
-Artifact 自动版本、SQLite 持久化、StudentLease、PredictRequest、Lazy Allocation、随机 IDLE 分配、固定 Worker、Artifact 切换、FIFO、全局/per-student lock、idle timeout、LRU reclaim、Worker health、Mock Worker、真实 KV260 Worker HTTP contract、PYNQ Overlay 部署、pytest 和 Smoke Test。
+Artifact 自动版本、SQLite 持久化、StudentLease、PredictRequest、Lazy Allocation、随机 IDLE 分配、固定 Worker、Artifact 切换、FIFO、全局/per-student lock、idle timeout、LRU reclaim、并发 Worker health、Mock Worker、真实 KV260 Worker HTTP contract、PYNQ Overlay 部署、花卉分类图像预处理与 AXI DMA adapter、pytest 和 Smoke Test。
 
 ### 20.2 测试边界
 
@@ -198,7 +206,7 @@ Mock 验证 HTTP contract、ownership、deploy count、串行、Queue 和 reclai
 
 ### 20.4 当前尚未实现
 
-应用专用 payload 与 AXI DMA/MMIO 的映射协议、生产身份认证、TLS、HA 和多进程分布式锁。真实 Worker 在 adapter 未配置时返回 HTTP 501，不会用 echo 伪造 FPGA 结果。V1 只能运行单 Uvicorn process，禁止 `--workers 4`。
+其他算法的应用专用 payload/DMA/MMIO adapter、生产身份认证、TLS、HA 和多进程分布式锁。当前花卉 adapter 已在代码中实现并由 fake DMA 单元测试覆盖；本次工作区验证不等于在真实 KV260 上重新完成 hardware verification。V1 只能运行单 Uvicorn process，禁止 `--workers 4`。
 
 ## 21. Runtime Factory
 
@@ -216,7 +224,7 @@ Runtime Factory 只负责建立板卡基础能力：
 [8/8] Final diagnostics and worker runtime report
 ```
 
-它验证 XRT、ZOCL、pyxrt、PYNQ、Device Tree、`EmbeddedDevice` 和 `allocate()`，随后安装并启用 `kv260-worker.service`。Runtime Factory 负责 Worker 基础 HTTP contract 和 Overlay 部署能力；Central 仍负责 Artifact、Lease 与 Request，应用专用 predict adapter 独立实现。
+它验证 XRT、ZOCL、pyxrt、PYNQ、Device Tree、`EmbeddedDevice` 和 `allocate()`，随后安装并启用 `kv260-worker.service`。Runtime Factory 同时安装 Worker HTTP contract、Overlay 部署能力、Pillow 图像解码依赖和花卉 AXI DMA adapter；Central 仍负责 Artifact、Lease 与 Request。
 
 ### 21.1 部署 PC 端仓库布局
 

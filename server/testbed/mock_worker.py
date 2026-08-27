@@ -109,6 +109,18 @@ async def predict(body: PredictBody) -> dict[str, Any]:
             await asyncio.sleep(float(os.getenv("MOCK_PREDICT_DELAY", "0.15")))
         finally:
             state.active_predicts -= 1
+    if "image_base64" in body.payload:
+        return {
+            "ok": True,
+            "status": "success",
+            "predicted_class": "bailianhua",
+            "flower": "bailianhua",
+            "flower_api": "bailianhua",
+            "flower_cn": "白莲花",
+            "raw_class": "白莲花",
+            "class_index": 0,
+            "confidence": 0.75,
+        }
     return {
         "ok": True,
         "board": state.board,

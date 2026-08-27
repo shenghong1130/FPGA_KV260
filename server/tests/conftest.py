@@ -22,6 +22,7 @@ class FakeWorkerClient:
         self.active_predicts: dict[str, int] = {}
         self.max_active_predicts: dict[str, int] = {}
         self.fail_predict_for: set[str] = set()
+        self.predict_payloads: list[dict[str, Any]] = []
         self.application: Any = None
 
     async def close(self) -> None:
@@ -64,6 +65,7 @@ class FakeWorkerClient:
     async def predict(
         self, worker: Worker, lease_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        self.predict_payloads.append(payload)
         state = self._state(worker.board)
         if state["lease_id"] != lease_id:
             raise WorkerClientError("wrong lease")
@@ -77,6 +79,18 @@ class FakeWorkerClient:
         try:
             await asyncio.sleep(0.02)
             state["predict_count"] += 1
+            if "image_base64" in payload:
+                return {
+                    "ok": True,
+                    "status": "success",
+                    "predicted_class": "bailianhua",
+                    "flower": "bailianhua",
+                    "flower_api": "bailianhua",
+                    "flower_cn": "白莲花",
+                    "raw_class": "白莲花",
+                    "class_index": 0,
+                    "confidence": 0.75,
+                }
             return {
                 "ok": True,
                 "board": worker.board,
@@ -126,6 +140,7 @@ async def test_context(tmp_path: Path) -> AsyncIterator[tuple[httpx.AsyncClient,
         lease_reaper_interval_seconds=3600,
         max_bit_size=1024 * 1024,
         max_hwh_size=1024 * 1024,
+        max_predict_image_size=64,
     )
     fake = FakeWorkerClient()
     application = create_app(settings, fake)  # type: ignore[arg-type]
