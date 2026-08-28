@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from .conftest import upload
+from .conftest import TEST_PASSWORD
 
 pytestmark = pytest.mark.asyncio
 
@@ -68,7 +69,7 @@ async def test_invalid_uploads(
     client, _ = test_context
     response = await client.post(
         "/fpga/artifacts",
-        data={"student_id": "student"},
+        data={"student_id": "student", "password": TEST_PASSWORD},
         files={"bit": (bit_name, bit), "hwh": (hwh_name, hwh)},
     )
     assert response.status_code == 422

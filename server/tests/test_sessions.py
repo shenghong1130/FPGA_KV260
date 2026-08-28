@@ -40,9 +40,11 @@ async def test_new_artifact_redeploys_on_same_worker(test_context) -> None:
     assert list(fake.deploy_counts.values()) == [2]
 
 
-async def test_no_artifact_and_missing_request_are_404(test_context) -> None:
+async def test_unregistered_student_is_unauthorized_and_missing_request_is_404(
+    test_context,
+) -> None:
     client, _ = test_context
-    assert (await predict(client, "missing")).status_code == 404
+    assert (await predict(client, "missing")).status_code == 401
     assert (await client.get("/requests/req_missing")).status_code == 404
 
 

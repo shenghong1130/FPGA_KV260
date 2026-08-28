@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 from ..db_models import PredictRequestRecord, RequestStatus
 from ..lease_manager import ArtifactNotFoundError, LeaseManager, RequestNotFoundError
 from ..schemas import PredictResponse, PublicPredictRequest
+from ..student_auth import InvalidStudentCredentialsError, StudentAuth
 
 router = APIRouter(tags=["predict"])
 
@@ -22,7 +23,11 @@ def response_for(record: PredictRequestRecord) -> PredictResponse:
 
 
 @router.post("/predict", response_model=PredictResponse)
-async def predict(request: Request, response: Response) -> PredictResponse:
+async def predict(
+    request: Request,
+    response: Response,
+    student_password: str | None = Header(default=None, alias="X-Student-Password"),
+) -> PredictResponse:
     manager: LeaseManager = request.app.state.services.lease_manager
     content_type = request.headers.get("content-type", "").lower()
     if content_type.startswith("multipart/form-data"):
@@ -35,6 +40,8 @@ async def predict(request: Request, response: Response) -> PredictResponse:
             raise HTTPException(status_code=422, detail="student_id is too long")
         if not isinstance(image, UploadFile):
             raise HTTPException(status_code=422, detail="image file is required")
+        student_id = student_id.strip()
+        await _authenticate(request, student_id, student_password)
         image_content_type = image.content_type
         if image_content_type not in {"image/jpeg", "image/png"}:
             await image.close()
@@ -47,7 +54,7 @@ async def predict(request: Request, response: Response) -> PredictResponse:
         if len(image_bytes) > limit:
             raise HTTPException(status_code=413, detail=f"image exceeds {limit} bytes")
         body = PublicPredictRequest(
-            student_id=student_id.strip(),
+            student_id=student_id,
             payload={
                 "image_base64": base64.b64encode(image_bytes).decode("ascii"),
                 "content_type": image_content_type,
@@ -58,6 +65,7 @@ async def predict(request: Request, response: Response) -> PredictResponse:
             body = PublicPredictRequest.model_validate(await request.json())
         except (ValidationError, ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail="invalid JSON predict request") from exc
+        await _authenticate(request, body.student_id, student_password)
     try:
         record = await manager.submit_predict(body.student_id, body.payload)
     except ArtifactNotFoundError as exc:
@@ -69,9 +77,28 @@ async def predict(request: Request, response: Response) -> PredictResponse:
 
 
 @router.get("/requests/{request_id}", response_model=PredictResponse)
-async def get_request(request_id: str, request: Request) -> PredictResponse:
+async def get_request(
+    request_id: str,
+    request: Request,
+    student_password: str | None = Header(default=None, alias="X-Student-Password"),
+) -> PredictResponse:
     manager: LeaseManager = request.app.state.services.lease_manager
     try:
-        return response_for(await manager.get_request(request_id))
+        record = await manager.get_request(request_id)
     except RequestNotFoundError as exc:
         raise HTTPException(status_code=404, detail="request not found") from exc
+    await _authenticate(request, record.student_id, student_password)
+    return response_for(record)
+
+
+async def _authenticate(
+    request: Request, student_id: str, password: str | None
+) -> None:
+    auth: StudentAuth = request.app.state.services.student_auth
+    try:
+        await auth.authenticate(student_id, password)
+    except InvalidStudentCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid student credentials",
+        ) from exc

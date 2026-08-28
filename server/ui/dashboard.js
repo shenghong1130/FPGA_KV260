@@ -265,11 +265,11 @@ function renderRecentArtifacts() {
 }
 async function uploadArtifact(form) {
   const result = $(".form-result", form.parentElement); clear(result); result.className = "form-result";
-  const student = form.elements.student_id.value.trim(), bit = form.elements.bit.files[0], hwh = form.elements.hwh.files[0];
-  if (!student || !bit || !hwh) { showFormError(result, "请填写 Student ID 并选择 bit/hwh 文件。"); return; }
+  const student = form.elements.student_id.value.trim(), password = form.elements.password.value, bit = form.elements.bit.files[0], hwh = form.elements.hwh.files[0];
+  if (!student || !password || !bit || !hwh) { showFormError(result, "请填写 Student ID、Password 并选择 bit/hwh 文件。"); return; }
   if (!bit.name.toLowerCase().endsWith(".bit") || !hwh.name.toLowerCase().endsWith(".hwh")) { showFormError(result, "文件扩展名必须是 .bit 和 .hwh。"); return; }
   const button = $("button[type=submit]", form), original = button.textContent; button.disabled = true; button.textContent = "Uploading...";
-  const data = new FormData(); data.append("student_id", student); data.append("bit", bit); data.append("hwh", hwh);
+  const data = new FormData(); data.append("student_id", student); data.append("password", password); data.append("bit", bit); data.append("hwh", hwh);
   try {
     const artifact = (await apiFetch("/fpga/artifacts", { method: "POST", body: data, timeout: 120000 })).data;
     result.className = "form-result success"; result.textContent = `上传成功 / Upload Successful：${artifact.student_id} ${artifact.version} ${artifact.artifact_id} · BIT ${formatBytes(artifact.bit_size)} · HWH ${formatBytes(artifact.hwh_size)}`;
@@ -287,9 +287,9 @@ function renderDetail(container, rows, jsonValue = undefined) {
   container.append(list);
   if (jsonValue !== undefined) container.append(node("pre", { text: JSON.stringify(jsonValue, null, 2) }));
 }
-async function queryRequest(requestId, target = $("#request-detail")) {
+async function queryRequest(requestId, target = $("#request-detail"), password = $("#request-password-input").value) {
   try {
-    const item = (await apiFetch(`/requests/${encodeURIComponent(requestId)}`)).data;
+    const item = (await apiFetch(`/requests/${encodeURIComponent(requestId)}`, { headers: { "X-Student-Password": password } })).data;
     renderDetail(target, [["Request ID", item.request_id], ["Student", item.student_id], ["Artifact", item.artifact_id], ["Version", item.version], ["Status", stateLabel(item.status)], ["Error", item.error]], item.result);
     return item;
   } catch (error) { target.className = "detail-output empty"; target.textContent = error.status === 404 ? "未找到 Request / Request not found" : error.message; throw error; }
@@ -297,7 +297,7 @@ async function queryRequest(requestId, target = $("#request-detail")) {
 async function queryStudent(studentId) {
   const target = $("#student-detail");
   try {
-    const item = (await apiFetch(`/students/${encodeURIComponent(studentId)}/status`)).data;
+    const item = (await apiFetch(`/students/${encodeURIComponent(studentId)}/status`, { headers: { "X-Student-Password": $("#student-password-input").value } })).data;
     renderDetail(target, [["Student ID", item.student_id], ["Latest Artifact", item.latest_artifact_id], ["Latest Version", item.latest_version], ["Lease State", stateLabel(item.lease_state)], ["Worker Assigned", item.worker_assigned ? "Yes" : "No"], ["Queued Requests", item.queued_requests], ["Running Requests", item.running_requests], ["Last Activity", formatTime(item.last_activity_at)]]);
   } catch (error) { target.className = "detail-output empty"; target.textContent = error.message; }
 }
@@ -305,26 +305,26 @@ async function queryStudent(studentId) {
 // Predict tester
 async function submitPredict(event) {
   event.preventDefault(); stopPolling();
-  const student = $("#predict-student").value.trim(), raw = $("#predict-payload").value;
+  const student = $("#predict-student").value.trim(), password = $("#predict-password").value, raw = $("#predict-payload").value;
   let payload;
   try { payload = JSON.parse(raw); } catch { toast("Payload 不是合法 JSON / Invalid JSON payload", "error"); return; }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) { toast("Payload 顶层必须是 JSON object", "error"); return; }
   if (!student) { toast("Student ID 不能为空", "error"); return; }
   const button = $("#predict-submit"), target = $("#predict-result"); button.disabled = true;
   try {
-    const response = await apiFetch("/predict", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ student_id: student, payload }), timeout: 60000 });
+    const response = await apiFetch("/predict", { method: "POST", headers: { "Content-Type": "application/json", "X-Student-Password": password }, body: JSON.stringify({ student_id: student, payload }), timeout: 60000 });
     const item = response.data;
     renderDetail(target, [["Request ID", item.request_id], ["Student", item.student_id], ["Artifact", item.artifact_id], ["Version", item.version], ["Status", stateLabel(item.status)], ["Error", item.error]], item.result);
-    if (response.status === 202 || stateKey(item.status) === "queued") { toast("请求已排队 / Queued", "warning"); startPolling(item.request_id); } else toast("请求完成 / Completed", "success");
+    if (response.status === 202 || stateKey(item.status) === "queued") { toast("请求已排队 / Queued", "warning"); startPolling(item.request_id, password); } else toast("请求完成 / Completed", "success");
   } catch (error) { target.className = "detail-output empty"; target.textContent = error.message; toast(error.message, "error"); }
   finally { button.disabled = false; }
 }
-function startPolling(requestId) {
+function startPolling(requestId, password) {
   stopPolling(); let attempts = 0; $("#stop-polling").classList.remove("hidden");
   state.polling = setInterval(async () => {
     attempts += 1;
     try {
-      const item = await queryRequest(requestId, $("#predict-result"));
+      const item = await queryRequest(requestId, $("#predict-result"), password);
       if (["completed", "failed"].includes(stateKey(item.status))) { stopPolling(); toast(item.status === "completed" ? "请求完成" : "请求失败", item.status === "completed" ? "success" : "error"); }
     } catch { /* The detail panel already contains the error. */ }
     if (attempts >= 150) { stopPolling(); toast("自动查询已停止，请手动查询 Request ID。", "warning"); }

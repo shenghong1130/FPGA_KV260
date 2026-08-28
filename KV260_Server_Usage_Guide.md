@@ -90,14 +90,20 @@ POST /fpga/artifacts
 Content-Type: multipart/form-data
 ```
 
-字段只有 `student_id`、`bit`、`hwh`：
+字段为 `student_id`、`password`、`bit`、`hwh`。密码长度必须为 8–128 个字符。建议交互式读取密码，避免直接写入 shell 命令历史：
 
 ```bash
+read -s STUDENT_PASSWORD
+export STUDENT_PASSWORD
+
 curl -X POST http://127.0.0.1:8000/fpga/artifacts \
   -F student_id=student01 \
+  -F password="$STUDENT_PASSWORD" \
   -F bit=@design.bit \
   -F hwh=@design.hwh
 ```
+
+如果 `student01` 是第一次上传，该密码会成为 `student01` 的固定密码；已有旧 Artifact、但尚无 credential 的学生也按此方式首次设置。以后上传新的 bit/hwh 必须使用相同密码。Central 只保存随机 salt 和 scrypt 派生值，不保存明文密码。认证失败返回 `401`，且不会保存文件、创建 Artifact 或增加版本。
 
 Central 按学生自动生成版本：同一学生依次为 `v1/v2/v3`，不同学生各自从 `v1` 开始。典型 `201` 响应：
 
@@ -130,6 +136,7 @@ curl http://127.0.0.1:8000/fpga/artifacts/art_xxxxx
 
 ```bash
 curl -X POST http://127.0.0.1:8000/predict \
+  -H "X-Student-Password: $STUDENT_PASSWORD" \
   -F student_id=student01 \
   -F image=@flower.jpg
 ```
@@ -155,6 +162,7 @@ curl -X POST http://127.0.0.1:8000/predict \
 ```bash
 curl -X POST http://127.0.0.1:8000/predict \
   -H 'Content-Type: application/json' \
+  -H "X-Student-Password: $STUDENT_PASSWORD" \
   -d '{
     "student_id": "student01",
     "payload": {"value": 123}
@@ -189,14 +197,16 @@ Central 自动选择该学生提交时的最新 Artifact，并生成 `request_id
 }
 ```
 
-学生响应不暴露具体 Worker 或内部 `lease_id`。没有可用 Artifact 返回 `404`。
+学生响应不暴露具体 Worker 或内部 `lease_id`。没有可用 Artifact 返回 `404`。`POST /predict` 只认证已注册学生，不会自动注册 credential；认证失败发生在创建 Request、Lease 或分配 Worker 之前。
 
 ### 4.5 查询 Request：Student → Central
 
 收到 `202` 后保存 `request_id`：
 
 ```bash
-curl http://127.0.0.1:8000/requests/req_xxxxx
+curl \
+  -H "X-Student-Password: $STUDENT_PASSWORD" \
+  http://127.0.0.1:8000/requests/req_xxxxx
 ```
 
 状态可能为 `queued/running/completed/failed`。Central 分配 Worker 后会自动执行，Student 不需要重新 POST。
@@ -204,7 +214,9 @@ curl http://127.0.0.1:8000/requests/req_xxxxx
 ### 4.6 查询学生状态：Student / Admin → Central
 
 ```bash
-curl http://127.0.0.1:8000/students/student01/status
+curl \
+  -H "X-Student-Password: $STUDENT_PASSWORD" \
+  http://127.0.0.1:8000/students/student01/status
 ```
 
 ```json
@@ -222,7 +234,29 @@ curl http://127.0.0.1:8000/students/student01/status
 
 不会返回具体 Worker。
 
-### 4.7 查看 Worker：Admin → Central
+### 4.7 修改学生密码：Student → Central
+
+使用旧密码认证，并在 JSON body 中提交新密码：
+
+```bash
+read -s NEW_STUDENT_PASSWORD
+export NEW_STUDENT_PASSWORD
+PASSWORD_JSON="$(python3 -c 'import json, os; print(json.dumps({"new_password": os.environ["NEW_STUDENT_PASSWORD"]}))')"
+
+curl -X POST http://127.0.0.1:8000/students/student01/password \
+  -H "Content-Type: application/json" \
+  -H "X-Student-Password: $STUDENT_PASSWORD" \
+  --data "$PASSWORD_JSON"
+```
+
+成功后旧密码立即失效。更新本地变量后再调用其他接口：
+
+```bash
+STUDENT_PASSWORD="$NEW_STUDENT_PASSWORD"
+export STUDENT_PASSWORD
+```
+
+### 4.8 查看 Worker：Admin → Central
 
 ```bash
 curl -s http://127.0.0.1:8000/workers | python3 -m json.tool
@@ -239,7 +273,7 @@ Admin 响应包含 `board/state/lease_id/student_id/artifact_id/fpga_ready/last_
 | `READY` | 已被 Lease 占用且 Overlay 已就绪 |
 | `BUSY` | 当前正在执行一次 predict |
 
-### 4.8 查看 Central 健康状态：Admin → Central
+### 4.9 查看 Central 健康状态：Admin → Central
 
 ```bash
 curl -s http://127.0.0.1:8000/health | python3 -m json.tool
@@ -247,7 +281,7 @@ curl -s http://127.0.0.1:8000/health | python3 -m json.tool
 
 响应统计 `workers`、`leases` 和 `requests`，具体数字取决于实时数据库状态。
 
-### 4.9 Central → Worker 内部接口
+### 4.10 Central → Worker 内部接口
 
 | 接口 | 用途 |
 | --- | --- |
@@ -263,13 +297,17 @@ curl -s http://127.0.0.1:8000/health | python3 -m json.tool
 
 ```bash
 CENTRAL=http://127.0.0.1:8000
+read -s STUDENT_PASSWORD
+export STUDENT_PASSWORD
 
 curl -X POST "$CENTRAL/fpga/artifacts" \
   -F student_id=student01 \
+  -F password="$STUDENT_PASSWORD" \
   -F bit=@design.bit \
   -F hwh=@design.hwh
 
 curl -X POST "$CENTRAL/predict" \
+  -H "X-Student-Password: $STUDENT_PASSWORD" \
   -F student_id=student01 \
   -F image=@flower.jpg
 ```
@@ -277,10 +315,12 @@ curl -X POST "$CENTRAL/predict" \
 若响应是 `completed`，直接读取 `result`；若为 `queued`，复制 `request_id` 并查询：
 
 ```bash
-curl "$CENTRAL/requests/req_xxxxx"
+curl \
+  -H "X-Student-Password: $STUDENT_PASSWORD" \
+  "$CENTRAL/requests/req_xxxxx"
 ```
 
-完整流程只有 upload → predict → 必要时查询 request。没有 Session 创建或 Release。
+完整流程只有 upload → predict → 必要时查询 request。没有 Session 创建或 Release。使用结束后可执行 `unset STUDENT_PASSWORD NEW_STUDENT_PASSWORD PASSWORD_JSON`。
 
 ## 6. Mock Cluster
 

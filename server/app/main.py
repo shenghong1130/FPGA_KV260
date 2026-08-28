@@ -19,6 +19,7 @@ from .config import Settings
 from .database import Database
 from .scheduler import Scheduler
 from .lease_manager import LeaseManager
+from .student_auth import StudentAuth
 from .worker_client import WorkerClient
 from .worker_registry import WorkerRegistry
 
@@ -37,6 +38,7 @@ class Services:
     worker_registry: WorkerRegistry
     scheduler: Scheduler
     lease_manager: LeaseManager
+    student_auth: StudentAuth
 
 
 class DashboardStaticFiles(StaticFiles):
@@ -97,6 +99,7 @@ def create_app(
             selected_settings.health_failure_threshold,
         )
         manager = LeaseManager(database.sessions, scheduler, client, selected_settings)
+        student_auth = StudentAuth(database.sessions)
         services = Services(
             settings=selected_settings,
             database=database,
@@ -105,6 +108,7 @@ def create_app(
             worker_registry=registry,
             scheduler=scheduler,
             lease_manager=manager,
+            student_auth=student_auth,
         )
         app.state.services = services
         await registry.sync_config()

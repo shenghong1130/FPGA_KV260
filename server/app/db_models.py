@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -93,6 +94,16 @@ class Artifact(Base):
     hwh_size: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     status: Mapped[str] = mapped_column(String(32), default=ArtifactStatus.READY.value)
+
+
+class StudentCredential(Base):
+    __tablename__ = "student_credentials"
+
+    student_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    password_salt: Mapped[bytes] = mapped_column(LargeBinary(32))
+    password_hash: Mapped[bytes] = mapped_column(LargeBinary(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Worker(Base):

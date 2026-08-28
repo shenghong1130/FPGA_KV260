@@ -7,6 +7,7 @@ import pytest
 from app.datetime_utils import ensure_utc
 from app.db_models import Artifact, LeaseStatus, StudentLease, Worker
 from app.schemas import ArtifactResponse, StudentStatusResponse, WorkerResponse
+from .conftest import password_headers
 
 NAIVE_UTC = datetime(2026, 8, 27, 9, 53, 7, 420198)
 
@@ -160,6 +161,11 @@ async def test_sqlite_datetime_api_responses_are_explicit_utc(test_context) -> N
     assert artifact_response.status_code == 200
     assert_utc_iso(artifact_response.json()["created_at"])
 
-    student_response = await client.get("/students/student-utc/status")
+    await fake.application.state.services.student_auth.authenticate_or_register(
+        "student-utc", "correct123"
+    )
+    student_response = await client.get(
+        "/students/student-utc/status", headers=password_headers()
+    )
     assert student_response.status_code == 200
     assert_utc_iso(student_response.json()["last_activity_at"])

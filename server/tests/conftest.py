@@ -14,6 +14,12 @@ from app.db_models import Artifact, Worker
 from app.main import create_app
 from app.worker_client import WorkerClientError
 
+TEST_PASSWORD = "correct123"
+
+
+def password_headers(password: str = TEST_PASSWORD) -> dict[str, str]:
+    return {"X-Student-Password": password}
+
 
 class FakeWorkerClient:
     def __init__(self) -> None:
@@ -158,10 +164,11 @@ async def upload(
     hwh: bytes = b"<SYSTEM><MODULES/></SYSTEM>",
     bit_name: str = "design.bit",
     hwh_name: str = "design.hwh",
+    password: str = TEST_PASSWORD,
 ) -> dict[str, Any]:
     response = await client.post(
         "/fpga/artifacts",
-        data={"student_id": student},
+        data={"student_id": student, "password": password},
         files={"bit": (bit_name, bit), "hwh": (hwh_name, hwh)},
     )
     response.raise_for_status()
@@ -173,7 +180,9 @@ async def upload(
 
 
 async def predict(client: httpx.AsyncClient, student: str,
-                  value: Any = 1) -> httpx.Response:
+                  value: Any = 1, password: str = TEST_PASSWORD) -> httpx.Response:
     return await client.post(
-        "/predict", json={"student_id": student, "payload": {"value": value}}
+        "/predict",
+        json={"student_id": student, "payload": {"value": value}},
+        headers=password_headers(password),
     )

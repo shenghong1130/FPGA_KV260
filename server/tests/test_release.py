@@ -6,7 +6,7 @@ import pytest
 from app.db_models import (
     PredictRequestRecord, RequestStatus, StudentLease, utcnow,
 )
-from .conftest import predict, upload
+from .conftest import password_headers, predict, upload
 
 pytestmark = pytest.mark.asyncio
 
@@ -22,7 +22,7 @@ async def test_idle_timeout_releases_without_student_api(test_context) -> None:
         database.commit()
     object.__setattr__(services.settings, "lease_idle_timeout_seconds", 1)
     await services.lease_manager.reap_once()
-    status = (await client.get("/students/a/status")).json()
+    status = (await client.get("/students/a/status", headers=password_headers())).json()
     assert status["lease_state"] == "unassigned"
     assert all(row["state"] == "idle" for row in (await client.get("/workers")).json())
 

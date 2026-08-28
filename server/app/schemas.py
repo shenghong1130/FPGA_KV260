@@ -57,6 +57,15 @@ class StudentStatusResponse(UtcResponseModel):
     last_activity_at: datetime | None
 
 
+class PasswordChangeRequest(BaseModel):
+    new_password: str
+
+
+class PasswordChangeResponse(BaseModel):
+    student_id: str
+    password_changed: bool
+
+
 class WorkerResponse(UtcResponseModel):
     board: str
     state: str

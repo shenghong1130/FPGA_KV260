@@ -8,6 +8,11 @@ from sqlalchemy import select
 from ..artifact_store import ArtifactStore, ArtifactValidationError
 from ..db_models import Artifact
 from ..schemas import ArtifactResponse
+from ..student_auth import (
+    InvalidStudentCredentialsError,
+    PasswordPolicyError,
+    StudentAuth,
+)
 
 LOGGER = logging.getLogger(__name__)
 router = APIRouter(prefix="/fpga/artifacts", tags=["artifacts"])
@@ -31,12 +36,25 @@ def _response(artifact: Artifact) -> ArtifactResponse:
 async def upload_artifact(
     request: Request,
     student_id: str = Form(min_length=1, max_length=128),
+    password: str | None = Form(default=None),
     bit: UploadFile = File(),
     hwh: UploadFile = File(),
 ) -> ArtifactResponse:
     store: ArtifactStore = request.app.state.services.artifact_store
+    auth: StudentAuth = request.app.state.services.student_auth
     try:
+        if password is None:
+            raise InvalidStudentCredentialsError
+        await auth.authenticate_or_register(student_id, password)
         artifact = await store.create(student_id, bit, hwh)
+    except InvalidStudentCredentialsError as exc:
+        LOGGER.warning("authentication failed student_id=%s", student_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid student credentials",
+        ) from exc
+    except PasswordPolicyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ArtifactValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:

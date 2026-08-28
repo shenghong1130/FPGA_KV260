@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 
 from app.db_models import LeaseStatus, StudentLease, Worker, WorkerState, utcnow
-from .conftest import predict, upload
+from .conftest import password_headers, predict, upload
 
 pytestmark = pytest.mark.asyncio
 
@@ -38,7 +38,9 @@ async def test_lru_pressure_reclaim_runs_queued_request(test_context) -> None:
     object.__setattr__(services.settings, "lease_reclaim_grace_seconds", 1)
     await services.lease_manager.reap_once()
     for _ in range(100):
-        result = (await client.get(f"/requests/{queued.json()['request_id']}")).json()
+        result = (await client.get(
+            f"/requests/{queued.json()['request_id']}", headers=password_headers()
+        )).json()
         if result["status"] == "completed":
             break
         await asyncio.sleep(0.01)
@@ -93,7 +95,9 @@ async def test_same_student_queued_requests_execute_fifo(test_context) -> None:
     results = []
     for response in queued:
         for _ in range(100):
-            body = (await client.get(f"/requests/{response.json()['request_id']}")).json()
+            body = (await client.get(
+                f"/requests/{response.json()['request_id']}", headers=password_headers()
+            )).json()
             if body["status"] == "completed":
                 break
             await asyncio.sleep(0.01)

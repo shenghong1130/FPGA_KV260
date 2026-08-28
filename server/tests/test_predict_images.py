@@ -4,7 +4,7 @@ import base64
 
 import pytest
 
-from .conftest import predict, upload
+from .conftest import password_headers, predict, upload
 
 pytestmark = pytest.mark.asyncio
 
@@ -17,6 +17,7 @@ async def test_multipart_image_is_forwarded_as_base64_without_leaking(test_conte
         "/predict",
         data={"student_id": "image-student"},
         files={"image": ("flower.png", image, "image/png")},
+        headers=password_headers(),
     )
     assert response.status_code == 200
     body = response.json()
@@ -42,6 +43,7 @@ async def test_multipart_image_can_queue(test_context) -> None:
         "/predict",
         data={"student_id": "d"},
         files={"image": ("flower.jpg", b"jpeg", "image/jpeg")},
+        headers=password_headers(),
     )
     assert response.status_code == 202
     assert response.json()["status"] == "queued"
@@ -57,18 +59,24 @@ async def test_multipart_image_can_queue(test_context) -> None:
 )
 async def test_multipart_image_validation(test_context, files, expected) -> None:
     client, _ = test_context
+    await upload(client, student="student-a")
     response = await client.post(
-        "/predict", data={"student_id": "student-a"}, files=files
+        "/predict",
+        data={"student_id": "student-a"},
+        files=files,
+        headers=password_headers(),
     )
     assert response.status_code == expected
 
 
 async def test_multipart_image_size_limit(test_context) -> None:
     client, _ = test_context
+    await upload(client, student="student-a")
     response = await client.post(
         "/predict",
         data={"student_id": "student-a"},
         files={"image": ("large.png", b"x" * 65, "image/png")},
+        headers=password_headers(),
     )
     assert response.status_code == 413
 
@@ -77,7 +85,9 @@ async def test_existing_json_predict_contract_is_preserved(test_context) -> None
     client, fake = test_context
     await upload(client, student="json-student")
     response = await client.post(
-        "/predict", json={"student_id": "json-student", "payload": {"value": 7}}
+        "/predict",
+        json={"student_id": "json-student", "payload": {"value": 7}},
+        headers=password_headers(),
     )
     assert response.status_code == 200
     assert response.json()["result"]["input"] == {"value": 7}

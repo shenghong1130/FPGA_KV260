@@ -456,7 +456,7 @@ iproute2
 linux-headers-<Xilinx kernel>
 ```
 
-其中 `software-properties-common` 只在缺少 `add-apt-repository` 时安装；kernel headers 只在对应 kernel build tree 缺失时安装。Worker 在同一 `/opt/kv260-pynq` venv 中使用 `fastapi==0.115.13` 和支持 Python 3.12 的 `pydantic==1.10.22`；Runtime Factory 会对 pynqmetadata 0.1.9 过严的 `pydantic==1.9.1` 包元数据约束作窄化的 Pydantic 1.x 兼容修正，并执行 `pip check` 与实际 import 验证。同时安装 Uvicorn、python-multipart 和 Pillow，不创建第二套 PYNQ，也不升级 PYNQ Runtime 已固定的 NumPy。
+其中 `software-properties-common` 只在缺少 `add-apt-repository` 时安装；kernel headers 只在对应 kernel build tree 缺失时安装。Worker 在同一 `/opt/kv260-pynq` venv 中使用 `fastapi==0.115.13` 和 `pydantic==1.9.1`，与 PYNQ 3.1.2 / pynqmetadata 0.1.9 兼容；同时安装 Uvicorn、python-multipart 和 Pillow。不创建第二套 PYNQ，也不升级 PYNQ Runtime 已固定的 NumPy。
 
 ## A.6 明确没有安装什么
 

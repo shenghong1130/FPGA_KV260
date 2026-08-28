@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+SMOKE_PASSWORD = "smoke-password"
+
 
 def passed(message: str) -> None:
     print(f"[PASS] {message}", flush=True)
@@ -33,7 +35,7 @@ async def upload(client: httpx.AsyncClient, base: str, student: str,
     bit = f"fake-bit:{student}:{marker}".encode()
     hwh = f'<SYSTEM NAME="{marker}"><MODULES/></SYSTEM>'.encode()
     response = await client.post(f"{base}/fpga/artifacts",
-        data={"student_id": student}, files={
+        data={"student_id": student, "password": SMOKE_PASSWORD}, files={
             "bit": ("design.bit", io.BytesIO(bit), "application/octet-stream"),
             "hwh": ("design.hwh", io.BytesIO(hwh), "application/xml"),
         })
@@ -43,16 +45,21 @@ async def upload(client: httpx.AsyncClient, base: str, student: str,
 
 async def predict(client: httpx.AsyncClient, base: str, student: str,
                   value: Any) -> httpx.Response:
-    return await client.post(f"{base}/predict", json={
-        "student_id": student, "payload": {"value": value},
-    })
+    return await client.post(
+        f"{base}/predict",
+        headers={"X-Student-Password": SMOKE_PASSWORD},
+        json={"student_id": student, "payload": {"value": value}},
+    )
 
 
 async def poll(client: httpx.AsyncClient, base: str, request_id: str,
                timeout: float = 20) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        response = await client.get(f"{base}/requests/{request_id}")
+        response = await client.get(
+            f"{base}/requests/{request_id}",
+            headers={"X-Student-Password": SMOKE_PASSWORD},
+        )
         response.raise_for_status()
         body = response.json()
         if body["status"] in {"completed", "failed"}:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from .conftest import predict, upload
+from .conftest import password_headers, predict, upload
 
 pytestmark = pytest.mark.asyncio
 
@@ -34,6 +34,8 @@ async def test_student_status_hides_worker_identity(test_context) -> None:
     client, _ = test_context
     await upload(client, student="student-a")
     await predict(client, "student-a")
-    status = (await client.get("/students/student-a/status")).json()
+    status = (await client.get(
+        "/students/student-a/status", headers=password_headers()
+    )).json()
     assert status["lease_state"] == "ready" and status["worker_assigned"] is True
     assert "worker" not in status and "lease_id" not in status
