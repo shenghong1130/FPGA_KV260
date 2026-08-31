@@ -35,12 +35,24 @@ async def change_password(
     try:
         await auth.change_password(student_id, student_password, body.new_password)
     except InvalidStudentCredentialsError as exc:
+        request.app.state.services.audit.record(
+            "AUTH_FAILED",
+            level="WARNING",
+            student_id=student_id,
+            message="Student authentication failed",
+        )
         raise HTTPException(
             status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="invalid student credentials",
         ) from exc
     except PasswordPolicyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    request.app.state.services.audit.record(
+        "STUDENT_PASSWORD_CHANGED",
+        level="WARNING",
+        student_id=student_id,
+        message="Student password changed",
+    )
     return PasswordChangeResponse(student_id=student_id, password_changed=True)
 
 
@@ -51,6 +63,12 @@ async def _authenticate(
     try:
         await auth.authenticate(student_id, password)
     except InvalidStudentCredentialsError as exc:
+        request.app.state.services.audit.record(
+            "AUTH_FAILED",
+            level="WARNING",
+            student_id=student_id,
+            message="Student authentication failed",
+        )
         raise HTTPException(
             status_code=http_status.HTTP_401_UNAUTHORIZED,
             detail="invalid student credentials",

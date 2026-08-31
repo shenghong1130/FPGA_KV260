@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .audit import AuditLogger
 from .db_models import (
     LeaseStatus,
     PredictRequestRecord,
@@ -39,12 +40,14 @@ class WorkerRegistry:
         config_path: Path,
         health_interval: float,
         failure_threshold: int,
+        audit: AuditLogger,
     ) -> None:
         self.sessions = sessions
         self.client = client
         self.config_path = config_path
         self.health_interval = health_interval
         self.failure_threshold = failure_threshold
+        self.audit = audit
         self.failures: dict[str, int] = defaultdict(int)
         self.monitor_task: asyncio.Task[None] | None = None
 
@@ -126,8 +129,28 @@ class WorkerRegistry:
                 worker = database.get(Worker, board)
                 if worker is None or worker.base_url != endpoint.base_url:
                     return
-                self._mark_offline(database, worker, str(exc))
+                previous_state = worker.state
+                failed_request = self._mark_offline(database, worker, str(exc))
                 database.commit()
+            if previous_state != WorkerState.OFFLINE.value:
+                self.audit.record(
+                    "WORKER_OFFLINE",
+                    level="ERROR",
+                    board=board,
+                    message="Worker became offline",
+                    details={"error": str(exc)},
+                )
+            if failed_request:
+                self.audit.record(
+                    "REQUEST_FAILED",
+                    level="ERROR",
+                    student_id=failed_request["student_id"],
+                    board=board,
+                    artifact_id=failed_request["artifact_id"],
+                    request_id=failed_request["request_id"],
+                    message="Predict Request failed because Worker went offline",
+                    details={"error": failed_request["error"]},
+                )
             return
 
         self.failures[board] = 0
@@ -137,6 +160,7 @@ class WorkerRegistry:
             worker = database.get(Worker, board)
             if worker is None or worker.base_url != endpoint.base_url:
                 return
+            previous_state = worker.state
             worker.last_seen = utcnow()
             worker.last_error = None
             remote_lease = status.get("lease_id")
@@ -179,9 +203,22 @@ class WorkerRegistry:
                 worker.lease_id = None
                 worker.fpga_ready = int(bool(status.get("fpga_ready")))
             database.commit()
+            current_state = worker.state
+        if (
+            previous_state in {WorkerState.OFFLINE.value, WorkerState.ERROR.value}
+            and current_state in {WorkerState.IDLE.value, WorkerState.READY.value}
+        ):
+            self.audit.record(
+                "WORKER_ONLINE",
+                board=board,
+                message="Worker is online",
+            )
 
     @staticmethod
-    def _mark_offline(database: Session, worker: Worker, error: str) -> None:
+    def _mark_offline(
+        database: Session, worker: Worker, error: str
+    ) -> dict[str, str] | None:
+        failed_request = None
         worker.state = WorkerState.OFFLINE.value
         worker.last_error = error
         if worker.lease_id:
@@ -197,6 +234,12 @@ class WorkerRegistry:
                     running.status = RequestStatus.FAILED.value
                     running.error = active.error
                     running.completed_at = utcnow()
+                    failed_request = {
+                        "student_id": active.student_id,
+                        "artifact_id": running.artifact_id,
+                        "request_id": running.id,
+                        "error": active.error,
+                    }
                 LOGGER.error(
                     "active lease lost: student_id=%s lease_id=%s artifact_id=%s board=%s",
                     active.student_id,
@@ -204,6 +247,7 @@ class WorkerRegistry:
                     active.current_artifact_id,
                     worker.board,
                 )
+        return failed_request
 
     async def monitor(self) -> None:
         try:

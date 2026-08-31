@@ -13,8 +13,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import URL
 from starlette.responses import RedirectResponse, Response
 
-from .api import artifacts, health, predict, students, workers
+from .api import admin_artifacts, artifacts, events, health, predict, students, workers
+from .artifact_cleanup import ArtifactCleanupService
 from .artifact_store import ArtifactStore
+from .audit import AuditLogger
 from .config import Settings
 from .database import Database
 from .scheduler import Scheduler
@@ -39,6 +41,8 @@ class Services:
     scheduler: Scheduler
     lease_manager: LeaseManager
     student_auth: StudentAuth
+    audit: AuditLogger
+    artifact_cleanup: ArtifactCleanupService
 
 
 class DashboardStaticFiles(StaticFiles):
@@ -91,15 +95,22 @@ def create_app(
             selected_settings.max_hwh_size,
         )
         scheduler = Scheduler(database.sessions)
+        audit = AuditLogger(database.sessions)
         registry = WorkerRegistry(
             database.sessions,
             client,
             selected_settings.workers_config,
             selected_settings.health_interval_seconds,
             selected_settings.health_failure_threshold,
+            audit,
         )
-        manager = LeaseManager(database.sessions, scheduler, client, selected_settings)
+        manager = LeaseManager(
+            database.sessions, scheduler, client, selected_settings, audit
+        )
         student_auth = StudentAuth(database.sessions)
+        artifact_cleanup = ArtifactCleanupService(
+            selected_settings.artifact_root, database.sessions, manager, audit
+        )
         services = Services(
             settings=selected_settings,
             database=database,
@@ -109,6 +120,8 @@ def create_app(
             scheduler=scheduler,
             lease_manager=manager,
             student_auth=student_auth,
+            audit=audit,
+            artifact_cleanup=artifact_cleanup,
         )
         app.state.services = services
         await registry.sync_config()
@@ -134,6 +147,8 @@ def create_app(
     application.include_router(predict.router)
     application.include_router(students.router)
     application.include_router(workers.router)
+    application.include_router(events.router)
+    application.include_router(admin_artifacts.router)
     ui_dir = Path(__file__).resolve().parents[1] / "ui"
     application.mount(
         "/ui",

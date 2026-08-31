@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import hmac
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
-
+from ..admin_auth import require_admin_token
 from ..lease_manager import (
     LeaseManager,
     WorkerNotFoundError,
@@ -34,24 +33,15 @@ async def list_workers(request: Request) -> list[WorkerResponse]:
     ]
 
 
-@router.post("/{board}/release", response_model=WorkerReleaseResponse)
+@router.post(
+    "/{board}/release",
+    response_model=WorkerReleaseResponse,
+    dependencies=[Depends(require_admin_token)],
+)
 async def release_worker(
     board: str,
     request: Request,
-    admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
 ) -> WorkerReleaseResponse:
-    configured_token = request.app.state.services.settings.admin_action_token
-    if configured_token is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="manual admin actions are not configured",
-        )
-    if admin_token is None or not hmac.compare_digest(admin_token, configured_token):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid admin action token",
-        )
-
     manager: LeaseManager = request.app.state.services.lease_manager
     try:
         student_id = await manager.release_worker(
@@ -67,6 +57,14 @@ async def release_worker(
         raise HTTPException(
             status_code=502, detail=f"worker release failed: {exc}"
         ) from exc
+    request.app.state.services.audit.record(
+        "ADMIN_WORKER_RELEASE",
+        level="WARNING",
+        actor_type="admin",
+        student_id=student_id,
+        board=board,
+        message="Administrator released Worker lease",
+    )
     return WorkerReleaseResponse(
         released=True, board=board, student_id=student_id
     )

@@ -333,6 +333,37 @@ curl -s http://127.0.0.1:8000/health | python3 -m json.tool
 
 这些接口只由 Central 调用。真实 Worker 会校验并加载 PYNQ Overlay，将图像预处理为 `(3, 28, 28)` `float32` 并通过 `axi_dma_0` 完成 12 类花卉推理。Mock 实现相同 contract，对图像 payload 返回固定分类结果，但不执行 PYNQ、Overlay、DMA 或 MMIO。
 
+### 4.13 Audit / Events
+
+Central 把重要业务状态变化持久化到 SQLite 的 `audit_events` 表。普通 Python logging 仍输出到 console/journal；Audit 用于长期追踪、Dashboard 查询和故障定位。健康轮询、UI GET 和成功的 Worker status polling 不会产生 Event，避免长期运行时数据库快速膨胀。
+
+Dashboard 通过 `系统事件 / Events` 页面查看和筛选 Level、Event Type、Student、Worker 与 Request。API 默认返回最新 100 条、最多 1000 条：
+
+```bash
+curl 'http://127.0.0.1:8000/events?limit=100'
+curl 'http://127.0.0.1:8000/events?level=ERROR&student_id=student01'
+```
+
+Audit 不保存学生密码、密码 hash/salt、Admin Token、lease/worker secret 或 predict 图片/base64 payload。Audit 数据库写入失败只写普通 error log，不会令 Artifact 上传、FPGA predict 或 Worker 调度失败。
+
+### 4.14 Artifact Cleanup
+
+Dashboard 的 `Artifact → 旧版本清理 / Artifact Cleanup` 先执行 Preview，再由管理员确认 Cleanup。两个管理接口均复用 `ADMIN_ACTION_TOKEN`：
+
+```bash
+curl \
+  -H "X-Admin-Token: $ADMIN_ACTION_TOKEN" \
+  http://127.0.0.1:8000/admin/artifacts/cleanup-preview
+
+curl -X POST \
+  -H "X-Admin-Token: $ADMIN_ACTION_TOKEN" \
+  http://127.0.0.1:8000/admin/artifacts/cleanup
+```
+
+Cleanup 只删除安全旧版本目录中的 `design.bit`、`design.hwh` 和 `manifest.json`，并把 Artifact 状态改为 `ARCHIVED`。Artifact 数据库 row、SHA-256、size、version 和历史 Request 的 `artifact_id` 关系全部保留。每个学生最新的 READY Artifact 永远保护；`StudentLease.current_artifact_id`、`Worker.current_artifact_id` 以及 QUEUED/RUNNING Request 使用的 Artifact 同样保护。COMPLETED/FAILED 历史 Request 本身不阻止旧实体文件归档。
+
+POST 不信任之前的 Preview，会在执行时重新计算保护集合，并在对应 student lock 内逐项复查。缺失的旧 Artifact 目录会按“实体文件已不存在”安全归档，释放空间记为 0；单项文件删除失败不会把该项标成 ARCHIVED，也不会阻止后续候选项处理。
+
 ## 5. 学生完整使用示例
 
 ```bash
@@ -446,7 +477,7 @@ pytest 是自动化服务测试；Mock Cluster + smoke_test 是完整 HTTP 集�
 | `LEASE_IDLE_TIMEOUT_SECONDS` | `1800` | 正常空闲回收 |
 | `LEASE_RECLAIM_GRACE_SECONDS` | `300` | 资源紧张回收门槛 |
 | `LEASE_REAPER_INTERVAL_SECONDS` | `10` | Reaper 周期 |
-| `ADMIN_ACTION_TOKEN` | 无 | 手动管理操作 token；未配置时禁用手动释放 |
+| `ADMIN_ACTION_TOKEN` | 无 | 手动管理操作 token；未配置时禁用手动释放和 Artifact Cleanup |
 | `MAX_BIT_SIZE` | `134217728` | bit 上限 |
 | `MAX_HWH_SIZE` | `16777216` | hwh 上限 |
 | `MAX_PREDICT_IMAGE_SIZE` | `8388608` | predict JPEG/PNG 上限 |

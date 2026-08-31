@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .audit import AuditLogger
 from .config import Settings
 from .db_models import (
     Artifact, ArtifactStatus, LeaseStatus, PredictRequestRecord, RequestStatus,
@@ -44,17 +45,20 @@ class LeaseManager:
     """Central-owned student leases and persistent predict requests."""
 
     def __init__(self, sessions: sessionmaker[Session], scheduler: Scheduler,
-                 client: WorkerClient, settings: Settings) -> None:
+                 client: WorkerClient, settings: Settings,
+                 audit: AuditLogger) -> None:
         self.sessions = sessions
         self.scheduler = scheduler
         self.client = client
         self.settings = settings
+        self.audit = audit
         self.student_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.allocator_event = asyncio.Event()
         self.allocator_task: asyncio.Task[None] | None = None
         self.reaper_task: asyncio.Task[None] | None = None
 
     async def recover_requests(self) -> None:
+        failed: list[tuple[str, str, str, str | None]] = []
         with self.sessions() as database:
             for request in database.scalars(select(PredictRequestRecord).where(
                     PredictRequestRecord.status == RequestStatus.RUNNING.value)).all():
@@ -65,7 +69,20 @@ class LeaseManager:
                 if lease:
                     lease.state = LeaseStatus.LOST.value
                     lease.error = request.error
+                failed.append(
+                    (request.student_id, request.id, request.artifact_id, request.error)
+                )
             database.commit()
+        for student_id, request_id, artifact_id, error in failed:
+            self.audit.record(
+                "REQUEST_FAILED",
+                level="ERROR",
+                student_id=student_id,
+                artifact_id=artifact_id,
+                request_id=request_id,
+                message="Predict Request failed during Central recovery",
+                details={"error": error},
+            )
 
     def start(self) -> None:
         self.allocator_task = asyncio.create_task(self._allocator_loop(), name="lease-allocator")
@@ -107,6 +124,14 @@ class LeaseManager:
                 database.add(record)
                 database.commit()
                 request_id = record.id
+                artifact_id = record.artifact_id
+            self.audit.record(
+                "REQUEST_CREATED",
+                student_id=student_id,
+                artifact_id=artifact_id,
+                request_id=request_id,
+                message="Predict Request created",
+            )
             await self._process_student_locked(student_id)
             result = await self.get_request(request_id)
             if result.status == RequestStatus.QUEUED.value:
@@ -183,6 +208,24 @@ class LeaseManager:
             if worker_id is None:
                 return
             LOGGER.info("worker reserved: student_id=%s board=%s", student_id, worker_id)
+            with self.sessions() as database:
+                lease = database.get(StudentLease, student_id)
+                pending = database.scalar(select(PredictRequestRecord).where(
+                    PredictRequestRecord.student_id == student_id,
+                    PredictRequestRecord.status == RequestStatus.QUEUED.value,
+                ).order_by(
+                    PredictRequestRecord.created_at, PredictRequestRecord.id
+                ).limit(1))
+                lease_id = lease.lease_id if lease else None
+                artifact_id = pending.artifact_id if pending else None
+            self.audit.record(
+                "WORKER_ASSIGNED",
+                student_id=student_id,
+                board=worker_id,
+                artifact_id=artifact_id,
+                message="Worker assigned to student",
+                details={"lease_id": lease_id},
+            )
         await self._drain_locked(student_id)
 
     async def _deploy(self, student_id: str, request_id: str) -> bool:
@@ -229,6 +272,16 @@ class LeaseManager:
                     worker.last_error = str(exc)
                     database.commit()
             self.allocator_event.set()
+            self.audit.record(
+                "FPGA_DEPLOY_FAILED",
+                level="ERROR",
+                student_id=student_id,
+                board=worker_board,
+                artifact_id=artifact_id,
+                request_id=request_id,
+                message="FPGA deploy failed",
+                details={"error": str(exc)},
+            )
             return False
 
         # Reconcile using fresh state so a stale network result cannot revive a
@@ -250,7 +303,15 @@ class LeaseManager:
             worker.fpga_ready = 1
             worker.last_error = None
             database.commit()
-            return True
+        self.audit.record(
+            "FPGA_DEPLOYED",
+            student_id=student_id,
+            board=worker_board,
+            artifact_id=artifact_id,
+            request_id=request_id,
+            message="FPGA overlay deployed",
+        )
+        return True
 
     async def _drain_locked(self, student_id: str) -> None:
         while True:
@@ -297,10 +358,20 @@ class LeaseManager:
                 request_payload = dict(record.payload)
                 record.status = RequestStatus.RUNNING.value
                 record.started_at = utcnow()
+                started_at = record.started_at
+                artifact_id = record.artifact_id
                 lease.state = LeaseStatus.BUSY.value
                 lease.last_activity_at = utcnow()
                 worker.state = WorkerState.BUSY.value
                 database.commit()
+            self.audit.record(
+                "REQUEST_STARTED",
+                student_id=student_id,
+                board=worker_board,
+                artifact_id=artifact_id,
+                request_id=request_id,
+                message="Predict Request started",
+            )
 
             try:
                 result = await self.client.predict(worker, lease_id, request_payload)
@@ -321,6 +392,21 @@ class LeaseManager:
                     worker.state = WorkerState.ERROR.value
                     worker.last_error = str(exc)
                     database.commit()
+                    completed_at = record.completed_at
+                duration = (
+                    (completed_at - started_at).total_seconds()
+                    if completed_at and started_at else None
+                )
+                self.audit.record(
+                    "REQUEST_FAILED",
+                    level="ERROR",
+                    student_id=student_id,
+                    board=worker_board,
+                    artifact_id=artifact_id,
+                    request_id=request_id,
+                    message="Predict Request failed",
+                    details={"duration": duration, "error": str(exc)},
+                )
                 self.allocator_event.set()
                 return
 
@@ -346,6 +432,25 @@ class LeaseManager:
                 lease.last_activity_at = utcnow()
                 worker.state = WorkerState.READY.value
                 database.commit()
+                completed_at = record.completed_at
+                compact_result = {
+                    key: record.result[key]
+                    for key in ("status", "predicted_class")
+                    if key in record.result
+                }
+            compact_result["duration"] = (
+                (completed_at - started_at).total_seconds()
+                if completed_at and started_at else None
+            )
+            self.audit.record(
+                "REQUEST_COMPLETED",
+                student_id=student_id,
+                board=worker_board,
+                artifact_id=artifact_id,
+                request_id=request_id,
+                message="Predict Request completed",
+                details=compact_result,
+            )
 
     async def _allocator_loop(self) -> None:
         try:
@@ -484,6 +589,13 @@ class LeaseManager:
                 lease.error = None
                 database.commit()
                 LOGGER.info("lease released: student_id=%s reason=%s", student_id, reason)
+        self.audit.record(
+            "WORKER_RELEASED",
+            student_id=student_id,
+            board=worker_board,
+            message="Worker lease released",
+            details={"reason": reason},
+        )
         self.allocator_event.set()
         return True
 

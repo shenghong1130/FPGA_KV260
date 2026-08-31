@@ -6,7 +6,7 @@ const SESSION_STORAGE = { adminToken: "kv260.adminActionToken" };
 const DEFAULT_API = location.protocol === "file:" ? "http://127.0.0.1:8000" : location.origin;
 const state = {
   apiBase: normalizeBase(localStorage.getItem(STORAGE.api) || DEFAULT_API),
-  health: null, workers: [], artifacts: [], requests: [], studentRequests: [], lastSuccess: null,
+  health: null, workers: [], artifacts: [], requests: [], studentRequests: [], events: [], cleanupPreview: null, lastSuccess: null,
   view: "overview", workerState: "all", artifactLimit: 100,
   studentId: "", requestId: "", polling: null,
 };
@@ -14,7 +14,7 @@ const statusText = {
   idle: "空闲", reserved: "已预留", deploying: "正在部署", ready: "已分配",
   busy: "正在计算", error: "错误", offline: "离线", queued: "排队中",
   running: "运行中", completed: "已完成", failed: "失败", unassigned: "未分配",
-  releasing: "正在释放", lost: "Worker 丢失",
+  releasing: "正在释放", lost: "Worker 丢失", archived: "已归档",
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -120,7 +120,7 @@ function applyTheme(theme) {
 }
 function currentView() {
   const value = location.hash.replace(/^#\//, "") || localStorage.getItem(STORAGE.view) || "overview";
-  return ["overview", "workers", "artifacts", "requests", "student", "tools"].includes(value) ? value : "overview";
+  return ["overview", "workers", "artifacts", "requests", "student", "events", "tools"].includes(value) ? value : "overview";
 }
 function route() {
   state.view = currentView(); localStorage.setItem(STORAGE.view, state.view);
@@ -284,7 +284,10 @@ async function loadArtifacts() {
 }
 function latestVersions() {
   const result = new Map();
-  for (const item of state.artifacts) result.set(item.student_id, Math.max(result.get(item.student_id) ?? -1, versionNumber(item.version)));
+  for (const item of state.artifacts) {
+    if (stateKey(item.status) !== "ready") continue;
+    result.set(item.student_id, Math.max(result.get(item.student_id) ?? -1, versionNumber(item.version)));
+  }
   return result;
 }
 function filteredArtifacts() {
@@ -330,6 +333,80 @@ async function uploadArtifact(form) {
   finally { button.disabled = false; button.textContent = original; }
 }
 function showFormError(element, message) { element.className = "form-result error"; element.textContent = message; }
+
+function renderCleanupPreview() {
+  const preview = state.cleanupPreview;
+  const container = $("#cleanup-preview"), body = $("#cleanup-table"); clear(body);
+  if (!preview) { container.classList.add("hidden"); return; }
+  $("#cleanup-candidate-count").textContent = preview.candidates;
+  $("#cleanup-reclaimable").textContent = formatBytes(preview.reclaimable_bytes);
+  for (const item of preview.artifacts) {
+    const row = node("tr");
+    [item.student_id, item.version, item.artifact_id, formatBytes(item.size)].forEach((value) => row.append(node("td", { className: String(value).startsWith("art_") ? "mono" : "", text: value })));
+    body.append(row);
+  }
+  if (!preview.artifacts.length) { const row = node("tr"); const cell = node("td", { className: "empty", text: "没有可安全清理的旧版本 / No cleanup candidates" }); cell.colSpan = 4; row.append(cell); body.append(row); }
+  $("#cleanup-execute-button").disabled = preview.candidates === 0;
+  container.classList.remove("hidden");
+}
+async function previewCleanup() {
+  const token = adminToken();
+  if (!token) { toast("请先在 Tools 中设置 Admin Action Token", "warning"); return; }
+  const button = $("#cleanup-preview-button"), original = button.textContent; button.disabled = true; button.textContent = "Scanning...";
+  try {
+    state.cleanupPreview = (await apiFetch("/admin/artifacts/cleanup-preview", { headers: { "X-Admin-Token": token } })).data;
+    $("#cleanup-result").className = "form-result success";
+    $("#cleanup-result").textContent = `可清理 Artifact：${state.cleanupPreview.candidates} · 预计释放：${formatBytes(state.cleanupPreview.reclaimable_bytes)}`;
+    renderCleanupPreview();
+  } catch (error) { showFormError($("#cleanup-result"), error.message); toast(error.message, "error"); }
+  finally { button.disabled = false; button.textContent = original; }
+}
+async function executeCleanup() {
+  const token = adminToken();
+  if (!token) { toast("请先在 Tools 中设置 Admin Action Token", "warning"); return; }
+  if (!window.confirm("将删除这些旧 Artifact 的 bit/hwh 实体文件。\nMetadata 和历史 Request 将保留。\n每个学生最新 Artifact 和正在使用的 Artifact 不会删除。\n是否继续？")) return;
+  const button = $("#cleanup-execute-button"), original = button.textContent; button.disabled = true; button.textContent = "Cleaning...";
+  try {
+    const result = (await apiFetch("/admin/artifacts/cleanup", { method: "POST", headers: { "X-Admin-Token": token }, timeout: 120000 })).data;
+    $("#cleanup-result").className = `form-result ${result.failed_count ? "error" : "success"}`;
+    $("#cleanup-result").textContent = `已归档 ${result.archived_count} 个 Artifact · 释放 ${formatBytes(result.freed_bytes)} · 失败 ${result.failed_count}`;
+    state.cleanupPreview = null; renderCleanupPreview();
+    await Promise.allSettled([loadArtifacts(), loadEvents()]);
+    toast("Artifact 清理完成 / Cleanup completed", result.failed_count ? "warning" : "success");
+  } catch (error) { showFormError($("#cleanup-result"), error.message); toast(error.message, "error"); }
+  finally { button.disabled = false; button.textContent = original; }
+}
+
+function eventFilters() {
+  return {
+    level: $("#event-level-filter").value.trim(), event_type: $("#event-type-filter").value.trim(),
+    student_id: $("#event-student-filter").value.trim(), board: $("#event-board-filter").value.trim(),
+    request_id: $("#event-request-filter").value.trim(),
+  };
+}
+async function loadEvents() {
+  const params = new URLSearchParams({ limit: "100" });
+  for (const [key, value] of Object.entries(eventFilters())) if (value) params.set(key, value);
+  const errorBox = $("#event-list-error");
+  try {
+    const data = (await apiFetch(`/events?${params}`)).data;
+    state.events = Array.isArray(data) ? data : [];
+    errorBox.classList.add("hidden"); renderEvents();
+  } catch (error) {
+    errorBox.textContent = `加载系统事件失败 / Failed to load events：${error.message}`;
+    errorBox.classList.remove("hidden"); if (!state.events.length) renderEvents();
+  }
+}
+function renderEvents() {
+  const body = $("#event-table"); clear(body);
+  if (!state.events.length) { const row = node("tr"); const cell = node("td", { className: "empty", text: "暂无系统事件 / No events" }); cell.colSpan = 8; row.append(cell); body.append(row); return; }
+  for (const item of state.events) {
+    const row = node("tr");
+    const level = stateKey(item.level);
+    [node("td", { text: formatTime(item.created_at), title: item.created_at }), node("td", { className: `status-${level}`, text: item.level }), node("td", { className: "mono", text: item.event_type }), node("td", { text: item.student_id || "—" }), node("td", { text: item.board || "—" }), node("td", { className: "mono", text: shortHash(item.artifact_id), title: item.artifact_id || "" }), node("td", { className: "mono", text: shortHash(item.request_id), title: item.request_id || "" }), node("td", { text: item.message, title: item.details ? JSON.stringify(item.details) : "" })].forEach((cell) => row.append(cell));
+    body.append(row);
+  }
+}
 
 // Request list, request detail, and student detail
 function renderDetail(container, rows, jsonValue = undefined) {
@@ -488,9 +565,10 @@ async function refreshCurrent(force = false) {
   else if (state.view === "artifacts") tasks.push(loadArtifacts());
   else if (state.view === "requests") tasks.push(loadRequests());
   else if (state.view === "student" && state.studentId) tasks.push(queryStudent(state.studentId));
+  else if (state.view === "events") tasks.push(loadEvents());
   if (force) await Promise.allSettled(tasks);
   const visible = document.visibilityState === "visible";
-  const normal = state.view === "artifacts" ? 10000 : state.view === "student" ? 5000 : 2000;
+  const normal = state.view === "artifacts" ? 10000 : ["student", "events"].includes(state.view) ? 5000 : 2000;
   refreshTimer = setTimeout(() => refreshCurrent(true), visible ? normal : 15000);
 }
 
@@ -500,7 +578,7 @@ function setApiBase(value) {
   try { new URL(normalized); } catch { toast("Central API URL 无效", "error"); return; }
   state.apiBase = normalized; localStorage.setItem(STORAGE.api, normalized);
   $("#api-base").value = normalized; $("#footer-api").textContent = normalized;
-  $("#api-docs").href = `${normalized}/docs`; state.health = null; state.workers = []; state.artifacts = []; state.requests = []; state.studentRequests = [];
+  $("#api-docs").href = `${normalized}/docs`; state.health = null; state.workers = []; state.artifacts = []; state.requests = []; state.studentRequests = []; state.events = []; state.cleanupPreview = null;
   toast("Central API 地址已保存", "success"); refreshCurrent(true);
 }
 function init() {
@@ -519,10 +597,12 @@ function init() {
   ["#artifact-student-filter", "#artifact-id-filter"].forEach((id) => $(id).addEventListener("input", renderArtifacts));
   $("#artifact-status-filter").addEventListener("change", renderArtifacts); $("#artifact-latest-only").addEventListener("change", renderArtifacts);
   $("#artifact-show-more").addEventListener("click", () => { state.artifactLimit += 100; renderArtifacts(); });
+  $("#cleanup-preview-button").addEventListener("click", previewCleanup); $("#cleanup-execute-button").addEventListener("click", executeCleanup);
   $$('[data-upload-form]').forEach((form) => form.addEventListener("submit", (event) => { event.preventDefault(); uploadArtifact(form); }));
   $("#request-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.requestId = $("#request-id-input").value.trim(); if (state.requestId) queryRequest(state.requestId).catch(() => {}); });
   $("#student-request-query-form").addEventListener("submit", (event) => { event.preventDefault(); const studentId = $("#student-request-id-input").value.trim(); if (studentId) queryStudentRequests(studentId); });
   $("#student-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.studentId = $("#student-id-input").value.trim(); if (state.studentId) queryStudent(state.studentId); });
+  $("#event-filter-form").addEventListener("submit", (event) => { event.preventDefault(); loadEvents(); });
   $("#admin-token-form").addEventListener("submit", saveAdminToken); $("#clear-admin-token").addEventListener("click", clearAdminToken);
   $("#predict-form").addEventListener("submit", submitPredict); $("#stop-polling").addEventListener("click", stopPolling);
   $("#close-dialog").addEventListener("click", () => $("#worker-dialog").close());

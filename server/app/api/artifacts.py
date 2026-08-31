@@ -49,6 +49,12 @@ async def upload_artifact(
         artifact = await store.create(student_id, bit, hwh)
     except InvalidStudentCredentialsError as exc:
         LOGGER.warning("authentication failed student_id=%s", student_id)
+        request.app.state.services.audit.record(
+            "AUTH_FAILED",
+            level="WARNING",
+            student_id=student_id,
+            message="Student authentication failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid student credentials",
@@ -64,6 +70,17 @@ async def upload_artifact(
         "artifact uploaded: artifact_id=%s student_id=%s",
         artifact.id,
         artifact.student_id,
+    )
+    request.app.state.services.audit.record(
+        "ARTIFACT_UPLOADED",
+        student_id=artifact.student_id,
+        artifact_id=artifact.id,
+        message=f"{artifact.student_id} uploaded Artifact {artifact.version}",
+        details={
+            "version": artifact.version,
+            "bit_size": artifact.bit_size,
+            "hwh_size": artifact.hwh_size,
+        },
     )
     return _response(artifact)
 

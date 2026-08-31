@@ -95,3 +95,44 @@ class WorkerReleaseResponse(BaseModel):
     released: bool
     board: str
     student_id: str
+
+
+class AuditEventResponse(UtcResponseModel):
+    id: str
+    event_type: str
+    level: str
+    actor_type: str | None = None
+    actor_id: str | None = None
+    student_id: str | None = None
+    board: str | None = None
+    artifact_id: str | None = None
+    request_id: str | None = None
+    message: str
+    details: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class ArtifactCleanupItem(BaseModel):
+    artifact_id: str
+    student_id: str
+    version: str
+    size: int
+
+
+class ArtifactCleanupPreview(BaseModel):
+    candidates: int
+    protected: int
+    reclaimable_bytes: int
+    artifacts: list[ArtifactCleanupItem]
+
+
+class ArtifactCleanupFailure(BaseModel):
+    artifact_id: str
+    error: str
+
+
+class ArtifactCleanupResult(BaseModel):
+    archived_count: int
+    failed_count: int
+    freed_bytes: int
+    failed: list[ArtifactCleanupFailure]

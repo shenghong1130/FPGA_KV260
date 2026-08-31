@@ -24,6 +24,7 @@ def utcnow() -> datetime:
 class ArtifactStatus(str, enum.Enum):
     READY = "READY"
     FAILED = "FAILED"
+    ARCHIVED = "ARCHIVED"
 
 
 class SessionStatus(str, enum.Enum):
@@ -169,3 +170,22 @@ class PredictRequestRecord(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    level: Mapped[str] = mapped_column(String(16), index=True)
+    actor_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    student_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    board: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    artifact_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    message: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )

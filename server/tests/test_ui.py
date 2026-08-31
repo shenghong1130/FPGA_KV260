@@ -18,6 +18,10 @@ async def test_dashboard_index(test_context) -> None:
     assert 'id="student-request-table"' in response.text
     assert "Admin Action Token" in response.text
     assert 'id="admin-token-input"' in response.text
+    assert 'data-nav="events"' in response.text
+    assert 'id="event-table"' in response.text
+    assert 'id="cleanup-preview-button"' in response.text
+    assert "旧版本清理" in response.text
     assert response.text.index('id="request-query-form"') < response.text.index(
         'id="student-request-query-form"'
     ) < response.text.index("Recent Predict Requests")
@@ -40,6 +44,9 @@ async def test_dashboard_static_assets(test_context) -> None:
     assert "Release Worker" in javascript.text
     assert "sessionStorage" in javascript.text
     assert '"X-Admin-Token": token' in javascript.text
+    assert 'state.view === "events"' in javascript.text
+    assert 'apiFetch("/admin/artifacts/cleanup-preview"' in javascript.text
+    assert 'apiFetch("/admin/artifacts/cleanup"' in javascript.text
 
 
 async def test_ui_path_redirects_to_trailing_slash(test_context) -> None:

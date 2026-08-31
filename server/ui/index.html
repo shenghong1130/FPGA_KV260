@@ -40,6 +40,7 @@
     <a href="#/artifacts" data-nav="artifacts">Artifact</a>
     <a href="#/requests" data-nav="requests">计算请求 <small>Requests</small></a>
     <a href="#/student" data-nav="student">学生状态 <small>Student</small></a>
+    <a href="#/events" data-nav="events">系统事件 <small>Events</small></a>
     <a href="#/tools" data-nav="tools">工具 <small>Tools</small></a>
     <a id="api-docs" href="/docs" target="_blank" rel="noopener noreferrer">API Docs ↗</a>
   </nav>
@@ -76,7 +77,17 @@
     <section id="view-artifacts" class="view" data-view="artifacts" aria-labelledby="artifacts-title">
       <div class="section-heading"><div><h2 id="artifacts-title">Artifact 管理</h2><p>Artifact Management</p></div></div>
       <section class="panel upload-panel"><h3>上传 Artifact <small>Upload Artifact</small></h3><form id="artifact-upload-form" class="upload-form" data-upload-form><label>Student ID<input name="student_id" maxlength="128" required></label><label>Password<input name="password" type="password" minlength="8" maxlength="128" autocomplete="current-password" required></label><label>design.bit<input name="bit" type="file" accept=".bit" required></label><label>design.hwh<input name="hwh" type="file" accept=".hwh" required></label><button class="button primary" type="submit">上传 / Upload</button></form><div class="form-result" aria-live="polite"></div></section>
-      <div class="toolbar"><label>Student 搜索<input id="artifact-student-filter" type="search"></label><label>Artifact ID<input id="artifact-id-filter" type="search"></label><label>状态<select id="artifact-status-filter"><option value="all">全部 / All</option><option>READY</option><option>FAILED</option></select></label><label class="check-label"><input id="artifact-latest-only" type="checkbox">仅显示最新版 / Latest only</label></div>
+      <section class="panel cleanup-panel">
+        <div class="panel-title"><div><h3>旧版本清理</h3><p>Artifact Cleanup</p></div><button id="cleanup-preview-button" class="button secondary" type="button">扫描旧版本 / Preview Cleanup</button></div>
+        <p class="hint">仅删除可安全清理的旧版 bit/hwh 实体文件；Metadata 与历史 Request 保留。</p>
+        <div id="cleanup-result" class="form-result" aria-live="polite">尚未扫描 / Not scanned</div>
+        <div id="cleanup-preview" class="hidden">
+          <div class="cleanup-summary"><strong id="cleanup-candidate-count">0</strong> 个可清理 Artifact · 预计释放 <strong id="cleanup-reclaimable">0 B</strong></div>
+          <div class="table-wrap"><table><thead><tr><th>Student</th><th>Version</th><th>Artifact ID</th><th>Size</th></tr></thead><tbody id="cleanup-table"></tbody></table></div>
+          <button id="cleanup-execute-button" class="button danger" type="button">清理以上旧版本 / Cleanup</button>
+        </div>
+      </section>
+      <div class="toolbar"><label>Student 搜索<input id="artifact-student-filter" type="search"></label><label>Artifact ID<input id="artifact-id-filter" type="search"></label><label>状态<select id="artifact-status-filter"><option value="all">全部 / All</option><option>READY</option><option>FAILED</option><option>ARCHIVED</option></select></label><label class="check-label"><input id="artifact-latest-only" type="checkbox">仅显示最新版 / Latest only</label></div>
       <div class="table-wrap panel flush"><table><thead><tr><th>Student</th><th>Version</th><th>Artifact ID</th><th>Status</th><th>BIT</th><th>HWH</th><th>Uploaded</th><th>SHA-256</th></tr></thead><tbody id="artifact-table"></tbody></table></div>
       <button id="artifact-show-more" class="button secondary hidden" type="button">显示更多 / Show more</button>
     </section>
@@ -100,6 +111,20 @@
     <section id="view-student" class="view" data-view="student" aria-labelledby="student-title">
       <div class="section-heading"><div><h2 id="student-title">学生状态</h2><p>Student Status</p></div></div>
       <section class="panel query-panel"><form id="student-query-form" class="inline-form"><label for="student-id-input">Student ID</label><input id="student-id-input" placeholder="student01" maxlength="128" required><label for="student-password-input">Password</label><input id="student-password-input" type="password" maxlength="128" autocomplete="current-password" required><button class="button primary" type="submit">查询</button></form><div id="student-detail" class="detail-output empty">请输入 Student ID。</div></section>
+    </section>
+
+    <section id="view-events" class="view" data-view="events" aria-labelledby="events-title">
+      <div class="section-heading"><div><h2 id="events-title">系统事件</h2><p>Events</p></div></div>
+      <form id="event-filter-form" class="toolbar panel">
+        <label>Level<select id="event-level-filter"><option value="">全部 / All</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select></label>
+        <label>Event Type<input id="event-type-filter" placeholder="REQUEST_FAILED" maxlength="64"></label>
+        <label>Student ID<input id="event-student-filter" maxlength="128"></label>
+        <label>Worker<input id="event-board-filter" placeholder="kv2601" maxlength="64"></label>
+        <label>Request ID<input id="event-request-filter" placeholder="req_xxx" maxlength="64"></label>
+        <button class="button primary" type="submit">刷新 / Refresh</button>
+      </form>
+      <div id="event-list-error" class="alert danger hidden" role="alert"></div>
+      <div class="table-wrap panel flush"><table><thead><tr><th>时间</th><th>Level</th><th>Event</th><th>Student</th><th>Worker</th><th>Artifact</th><th>Request</th><th>Message</th></tr></thead><tbody id="event-table"><tr><td class="empty" colspan="8">Loading...</td></tr></tbody></table></div>
     </section>
 
     <section id="view-tools" class="view" data-view="tools" aria-labelledby="tools-title">

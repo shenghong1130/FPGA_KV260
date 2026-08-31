@@ -125,6 +125,12 @@ async def _authenticate(
     try:
         await auth.authenticate(student_id, password)
     except InvalidStudentCredentialsError as exc:
+        request.app.state.services.audit.record(
+            "AUTH_FAILED",
+            level="WARNING",
+            student_id=student_id,
+            message="Student authentication failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid student credentials",
