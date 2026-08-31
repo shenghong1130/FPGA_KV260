@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import base64
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 from ..db_models import PredictRequestRecord, RequestStatus
 from ..lease_manager import ArtifactNotFoundError, LeaseManager, RequestNotFoundError
-from ..schemas import PredictResponse, PublicPredictRequest
+from ..schemas import PredictRequestListItem, PredictResponse, PublicPredictRequest
 from ..student_auth import InvalidStudentCredentialsError, StudentAuth
 
 router = APIRouter(tags=["predict"])
@@ -19,6 +19,22 @@ def response_for(record: PredictRequestRecord) -> PredictResponse:
         request_id=record.id, student_id=record.student_id,
         artifact_id=record.artifact_id, version=record.artifact_version,
         status=record.status.lower(), result=record.result, error=record.error,
+    )
+
+
+def list_response_for(record: PredictRequestRecord) -> PredictRequestListItem:
+    return PredictRequestListItem(
+        request_id=record.id,
+        student_id=record.student_id,
+        artifact_id=record.artifact_id,
+        version=record.artifact_version,
+        status=record.status.lower(),
+        worker=None,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        completed_at=record.completed_at,
+        result=record.result,
+        error=record.error,
     )
 
 
@@ -74,6 +90,17 @@ async def predict(
                             if record.status == RequestStatus.QUEUED.value
                             else status.HTTP_200_OK)
     return response_for(record)
+
+
+@router.get("/requests", response_model=list[PredictRequestListItem])
+async def list_requests(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    student_id: str | None = Query(default=None, min_length=1, max_length=128),
+) -> list[PredictRequestListItem]:
+    manager: LeaseManager = request.app.state.services.lease_manager
+    records = await manager.list_requests(limit, student_id)
+    return [list_response_for(record) for record in records]
 
 
 @router.get("/requests/{request_id}", response_model=PredictResponse)

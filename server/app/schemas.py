@@ -46,6 +46,20 @@ class PredictResponse(UtcResponseModel):
     error: str | None = None
 
 
+class PredictRequestListItem(UtcResponseModel):
+    request_id: str
+    student_id: str
+    artifact_id: str
+    version: str
+    status: str
+    worker: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
+
+
 class StudentStatusResponse(UtcResponseModel):
     student_id: str
     latest_artifact_id: str | None

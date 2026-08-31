@@ -5,7 +5,7 @@ const STORAGE = { api: "kv260.centralApi", theme: "kv260.theme", view: "kv260.vi
 const DEFAULT_API = location.protocol === "file:" ? "http://127.0.0.1:8000" : location.origin;
 const state = {
   apiBase: normalizeBase(localStorage.getItem(STORAGE.api) || DEFAULT_API),
-  health: null, workers: [], artifacts: [], lastSuccess: null,
+  health: null, workers: [], artifacts: [], requests: [], studentRequests: [], lastSuccess: null,
   view: "overview", workerState: "all", artifactLimit: 100,
   studentId: "", requestId: "", polling: null,
 };
@@ -158,7 +158,8 @@ function renderOverview() {
     ["已分配", "READY", workers.ready], ["正在计算", "BUSY", workers.busy],
     ["正在部署", "DEPLOYING", workers.deploying], ["离线", "OFFLINE", workers.offline],
     ["错误", "ERROR", workers.error], ["排队请求", "Queued Requests", requests.queued],
-    ["运行请求", "Running Requests", requests.running], ["失败请求", "Failed Requests", requests.failed],
+    ["运行请求", "Running Requests", requests.running], ["已完成请求", "Completed Requests", requests.completed],
+    ["失败请求", "Failed Requests", requests.failed],
   ];
   const container = $("#summary-cards"); clear(container);
   for (const [label, secondary, count] of cards) {
@@ -279,13 +280,107 @@ async function uploadArtifact(form) {
 }
 function showFormError(element, message) { element.className = "form-result error"; element.textContent = message; }
 
-// Request and student detail
+// Request list, request detail, and student detail
 function renderDetail(container, rows, jsonValue = undefined) {
   clear(container); container.className = "detail-output";
   const list = node("dl", { className: "detail-grid" });
   for (const [label, value] of rows) list.append(node("dt", { text: label }), node("dd", { text: value ?? "—" }));
   container.append(list);
   if (jsonValue !== undefined) container.append(node("pre", { text: JSON.stringify(jsonValue, null, 2) }));
+}
+function requestDuration(item) {
+  if (!item.started_at) return "—";
+  const start = new Date(item.started_at).getTime();
+  const end = item.completed_at ? new Date(item.completed_at).getTime() : Date.now();
+  const seconds = (end - start) / 1000;
+  return Number.isFinite(seconds) && seconds >= 0 ? `${seconds.toFixed(2)} s` : "—";
+}
+function requestResultSummary(result, status) {
+  const container = node("div", { className: "result-summary" });
+  if (!result || typeof result !== "object") {
+    container.append(node("span", { text: stateKey(status) === "completed" ? "Completed" : "—" }));
+    return container;
+  }
+  const chinese = result.flower_cn || result.raw_class;
+  const english = result.flower || result.predicted_class || result.flower_api;
+  let label = chinese && english && chinese !== english ? `${chinese} / ${english}` : chinese || english;
+  if (!label) {
+    const keys = Object.keys(result).filter((key) => !["ok", "status"].includes(key)).slice(0, 2);
+    label = keys.length ? keys.map((key) => `${key}: ${String(result[key])}`).join(" · ") : "Completed";
+  }
+  container.append(node("span", { text: label }));
+  const confidence = Number(result.confidence);
+  if (result.confidence != null && Number.isFinite(confidence)) container.append(node("small", { text: confidence.toFixed(2) }));
+  return container;
+}
+async function loadRequests() {
+  const errorBox = $("#request-list-error");
+  try {
+    const data = (await apiFetch("/requests?limit=100")).data;
+    state.requests = Array.isArray(data) ? data : [];
+    errorBox.classList.add("hidden");
+    renderRequests();
+  } catch (error) {
+    errorBox.textContent = `加载 Request 列表失败 / Failed to load requests：${error.message}`;
+    errorBox.classList.remove("hidden");
+    if (!state.requests.length) renderRequests();
+  }
+}
+function renderRequests(body = $("#request-table"), requests = state.requests, emptyMessage = "暂无计算请求 / No predict requests") {
+  clear(body);
+  if (!requests.length) {
+    const row = node("tr"); const cell = node("td", { className: "empty", text: emptyMessage });
+    cell.colSpan = 10; row.append(cell); body.append(row); return;
+  }
+  for (const item of requests) {
+    const key = stateKey(item.status);
+    const row = node("tr", { className: `request-row state-${key}` });
+    row.tabIndex = 0;
+    const requestId = node("td", { className: "mono", text: shortHash(item.request_id), title: item.request_id });
+    const artifact = node("td", { className: "mono", text: `${shortHash(item.artifact_id)} / ${item.version || "—"}`, title: `${item.artifact_id || ""} / ${item.version || ""}` });
+    const result = node("td"); result.append(requestResultSummary(item.result, item.status));
+    const detailButton = node("button", { className: "link-button", text: "详情 / Detail", type: "button" });
+    detailButton.addEventListener("click", (event) => { event.stopPropagation(); openRequest(item); });
+    [
+      node("td", { className: `status-${key}`, text: stateLabel(item.status) }), requestId,
+      node("td", { text: item.student_id || "—" }), artifact, node("td", { text: item.worker || "—" }),
+      node("td", { text: formatTime(item.created_at), title: item.created_at }), node("td", { text: requestDuration(item) }),
+      result, node("td", { className: "request-error", text: item.error || "—", title: item.error || "" }), node("td", {}, [detailButton]),
+    ].forEach((cell) => row.append(cell));
+    row.addEventListener("click", () => openRequest(item));
+    row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openRequest(item); } });
+    body.append(row);
+  }
+}
+async function queryStudentRequests(studentId) {
+  const errorBox = $("#student-request-error");
+  try {
+    const path = `/requests?student_id=${encodeURIComponent(studentId)}&limit=100`;
+    const data = (await apiFetch(path)).data;
+    state.studentRequests = Array.isArray(data) ? data : [];
+    errorBox.classList.add("hidden");
+    renderRequests(
+      $("#student-request-table"), state.studentRequests,
+      `该学生暂无计算请求 / No predict requests for ${studentId}`,
+    );
+  } catch (error) {
+    errorBox.textContent = `加载学生 Request 列表失败 / Failed to load student requests：${error.message}`;
+    errorBox.classList.remove("hidden");
+    if (!state.studentRequests.length) renderRequests($("#student-request-table"), []);
+  }
+}
+function openRequest(item) {
+  const content = $("#request-dialog-content"); clear(content);
+  const list = node("dl", { className: "detail-grid" });
+  const rows = [
+    ["Request ID", item.request_id], ["Student ID", item.student_id], ["Artifact ID", item.artifact_id],
+    ["Version", item.version], ["Status", stateLabel(item.status)], ["Worker", item.worker],
+    ["Created At", formatTime(item.created_at)], ["Started At", formatTime(item.started_at)],
+    ["Completed At", formatTime(item.completed_at)], ["Duration", requestDuration(item)], ["Error", item.error],
+  ];
+  for (const [label, value] of rows) list.append(node("dt", { text: label }), node("dd", { text: value ?? "—" }));
+  content.append(list, node("h3", { text: "Result" }), node("pre", { text: JSON.stringify(item.result, null, 2) }));
+  $("#request-dialog").showModal();
 }
 async function queryRequest(requestId, target = $("#request-detail"), password = $("#request-password-input").value) {
   try {
@@ -340,6 +435,7 @@ async function refreshCurrent(force = false) {
   if (state.view === "overview") tasks.push(loadHealth(), loadWorkers(), loadArtifacts());
   else if (state.view === "workers") tasks.push(loadHealth(), loadWorkers());
   else if (state.view === "artifacts") tasks.push(loadArtifacts());
+  else if (state.view === "requests") tasks.push(loadRequests());
   else if (state.view === "student" && state.studentId) tasks.push(queryStudent(state.studentId));
   if (force) await Promise.allSettled(tasks);
   const visible = document.visibilityState === "visible";
@@ -353,7 +449,7 @@ function setApiBase(value) {
   try { new URL(normalized); } catch { toast("Central API URL 无效", "error"); return; }
   state.apiBase = normalized; localStorage.setItem(STORAGE.api, normalized);
   $("#api-base").value = normalized; $("#footer-api").textContent = normalized;
-  $("#api-docs").href = `${normalized}/docs`; state.health = null; state.workers = []; state.artifacts = [];
+  $("#api-docs").href = `${normalized}/docs`; state.health = null; state.workers = []; state.artifacts = []; state.requests = []; state.studentRequests = [];
   toast("Central API 地址已保存", "success"); refreshCurrent(true);
 }
 function init() {
@@ -373,10 +469,13 @@ function init() {
   $("#artifact-show-more").addEventListener("click", () => { state.artifactLimit += 100; renderArtifacts(); });
   $$('[data-upload-form]').forEach((form) => form.addEventListener("submit", (event) => { event.preventDefault(); uploadArtifact(form); }));
   $("#request-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.requestId = $("#request-id-input").value.trim(); if (state.requestId) queryRequest(state.requestId).catch(() => {}); });
+  $("#student-request-query-form").addEventListener("submit", (event) => { event.preventDefault(); const studentId = $("#student-request-id-input").value.trim(); if (studentId) queryStudentRequests(studentId); });
   $("#student-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.studentId = $("#student-id-input").value.trim(); if (state.studentId) queryStudent(state.studentId); });
   $("#predict-form").addEventListener("submit", submitPredict); $("#stop-polling").addEventListener("click", stopPolling);
   $("#close-dialog").addEventListener("click", () => $("#worker-dialog").close());
   $("#worker-dialog").addEventListener("click", (event) => { if (event.target === $("#worker-dialog")) $("#worker-dialog").close(); });
+  $("#close-request-dialog").addEventListener("click", () => $("#request-dialog").close());
+  $("#request-dialog").addEventListener("click", (event) => { if (event.target === $("#request-dialog")) $("#request-dialog").close(); });
   route();
 }
 document.addEventListener("DOMContentLoaded", init);

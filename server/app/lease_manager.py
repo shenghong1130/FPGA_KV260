@@ -108,6 +108,19 @@ class LeaseManager:
                 raise RequestNotFoundError(request_id)
             return record
 
+    async def list_requests(
+        self, limit: int, student_id: str | None = None
+    ) -> list[PredictRequestRecord]:
+        with self.sessions() as database:
+            query = select(PredictRequestRecord)
+            if student_id is not None:
+                query = query.where(PredictRequestRecord.student_id == student_id)
+            query = query.order_by(
+                PredictRequestRecord.created_at.desc(),
+                PredictRequestRecord.id.desc(),
+            ).limit(limit)
+            return list(database.scalars(query).all())
+
     async def student_status(self, student_id: str) -> dict[str, Any]:
         with self.sessions() as database:
             artifact = self._latest_artifact(database, student_id)

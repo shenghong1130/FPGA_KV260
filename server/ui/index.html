@@ -83,8 +83,18 @@
 
     <section id="view-requests" class="view" data-view="requests" aria-labelledby="requests-title">
       <div class="section-heading"><div><h2 id="requests-title">计算请求</h2><p>Predict Requests</p></div></div>
-      <div id="request-list-unavailable" class="alert info">当前 Central API 未提供全局 Request 列表接口。<br><span>Global request listing is not available in the current Central API.</span></div>
       <section class="panel query-panel"><h3>按 Request ID 查询</h3><form id="request-query-form" class="inline-form"><label for="request-id-input">Request ID</label><input id="request-id-input" placeholder="req_xxxxx" required><label for="request-password-input">Password</label><input id="request-password-input" type="password" maxlength="128" autocomplete="current-password" required><button class="button primary" type="submit">查询</button></form><div id="request-detail" class="detail-output empty">请输入 Request ID。</div></section>
+      <section class="panel query-panel">
+        <div class="panel-title"><div><h3>按 Student ID 查询请求</h3><p>Requests by Student ID</p></div></div>
+        <form id="student-request-query-form" class="inline-form"><label for="student-request-id-input">Student ID</label><input id="student-request-id-input" placeholder="student01" maxlength="128" required><button class="button primary" type="submit">查询</button></form>
+        <div id="student-request-error" class="alert danger hidden" role="alert">加载学生 Request 列表失败 / Failed to load student requests</div>
+        <div class="table-wrap"><table><thead><tr><th>Status</th><th>Request ID</th><th>Student</th><th>Artifact / Version</th><th>Worker</th><th>Created</th><th>Duration</th><th>Result</th><th>Error</th><th>Detail</th></tr></thead><tbody id="student-request-table"><tr><td class="empty" colspan="10">请输入 Student ID。</td></tr></tbody></table></div>
+      </section>
+      <section class="panel request-list-panel">
+        <div class="panel-title"><div><h3>最近计算请求</h3><p>Recent Predict Requests</p></div><span class="secondary">自动刷新 / Auto refresh</span></div>
+        <div id="request-list-error" class="alert danger hidden" role="alert">加载 Request 列表失败 / Failed to load requests</div>
+        <div class="table-wrap"><table><thead><tr><th>Status</th><th>Request ID</th><th>Student</th><th>Artifact / Version</th><th>Worker</th><th>Created</th><th>Duration</th><th>Result</th><th>Error</th><th>Detail</th></tr></thead><tbody id="request-table"><tr><td class="empty" colspan="10">Loading...</td></tr></tbody></table></div>
+      </section>
     </section>
 
     <section id="view-student" class="view" data-view="student" aria-labelledby="student-title">
@@ -106,6 +116,7 @@
   <footer><span>KV260 Central Admin Dashboard · UI v1</span><span>Central API: <code id="footer-api">—</code></span></footer>
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
   <dialog id="worker-dialog" aria-labelledby="worker-dialog-title"><div class="dialog-head"><h2 id="worker-dialog-title">Worker Detail</h2><button id="close-dialog" class="icon-button" type="button" aria-label="关闭 Worker 详情">×</button></div><div id="worker-dialog-content"></div></dialog>
+  <dialog id="request-dialog" aria-labelledby="request-dialog-title"><div class="dialog-head"><h2 id="request-dialog-title">Request Detail</h2><button id="close-request-dialog" class="icon-button" type="button" aria-label="关闭 Request 详情">×</button></div><div id="request-dialog-content"></div></dialog>
   <script src="dashboard.js" defer></script>
 </body>
 </html>

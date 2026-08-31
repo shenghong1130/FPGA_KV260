@@ -12,6 +12,14 @@ async def test_dashboard_index(test_context) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "KV260 FPGA 共享计算平台" in response.text
+    assert "最近计算请求" in response.text
+    assert 'id="request-table"' in response.text
+    assert 'id="student-request-query-form"' in response.text
+    assert 'id="student-request-table"' in response.text
+    assert response.text.index('id="request-query-form"') < response.text.index(
+        'id="student-request-query-form"'
+    ) < response.text.index("Recent Predict Requests")
+    assert "Global request listing is not available" not in response.text
 
 
 async def test_dashboard_static_assets(test_context) -> None:
@@ -22,6 +30,11 @@ async def test_dashboard_static_assets(test_context) -> None:
     assert css.headers["content-type"].startswith("text/css")
     assert javascript.status_code == 200
     assert "javascript" in javascript.headers["content-type"]
+    assert 'apiFetch("/requests?limit=100")' in javascript.text
+    assert "student_id=${encodeURIComponent(studentId)}" in javascript.text
+    assert 'renderRequests($("#student-request-table")' in javascript.text
+    assert 'state.view === "requests"' in javascript.text
+    assert "Completed Requests" in javascript.text
 
 
 async def test_ui_path_redirects_to_trailing_slash(test_context) -> None:
