@@ -273,7 +273,47 @@ Admin 响应包含 `board/state/lease_id/student_id/artifact_id/fpga_ready/last_
 | `READY` | 已被 Lease 占用且 Overlay 已就绪 |
 | `BUSY` | 当前正在执行一次 predict |
 
-### 4.9 查看 Central 健康状态：Admin → Central
+### 4.9 自动释放
+
+Central 保留现有的两种自动 Lease 回收方式：
+
+- READY Lease 空闲达到 `LEASE_IDLE_TIMEOUT_SECONDS` 后自动释放，默认 1800 秒。
+- 有其他学生排队时，READY Lease 空闲达到 `LEASE_RECLAIM_GRACE_SECONDS` 后按 LRU 回收，默认 300 秒。
+- Reaper 按 `LEASE_REAPER_INTERVAL_SECONDS` 运行，默认周期 10 秒。
+
+这些值仍可通过同名环境变量配置。自动释放最终调用 `LeaseManager.release_student()`，再由 Central 请求 Worker 的 `POST /internal/release`；不会直接清理数据库 ownership。
+
+### 4.10 手动释放
+
+手动释放属于需要单独 Admin Token 的破坏性管理操作。启动 Central 前配置一个无固定默认值的安全随机 token：
+
+```bash
+read -s ADMIN_ACTION_TOKEN
+export ADMIN_ACTION_TOKEN
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Dashboard 操作路径：
+
+```text
+Tools → Admin Action Token → Save for this session
+Workers → Worker Detail → Release Worker
+```
+
+Dashboard 只把 token 保存到当前标签页的 `sessionStorage`，不会写入长期 `localStorage`。关闭标签页后自然失效，保存后输入框不会回显 token 明文。
+
+只有 ownership 一致、没有 queued/running request 的安全 `READY` Lease 可以手动释放。`BUSY`、`DEPLOYING`、`RESERVED`、`RELEASING`、`OFFLINE` 和 `ERROR` 状态均拒绝释放；手动释放不会取消 predict、强制中断 FPGA 或直接修改数据库 ownership。成功后仍通过现有 allocator/scheduler 自动处理等待最久的 queued student。
+
+对应 API 为：
+
+```bash
+curl -X POST http://127.0.0.1:8000/workers/kv2604/release \
+  -H "X-Admin-Token: $ADMIN_ACTION_TOKEN"
+```
+
+未配置 `ADMIN_ACTION_TOKEN` 时接口返回 `503`；缺少或错误 token 返回 `401`；Worker 当前不能安全释放返回 `409`。
+
+### 4.11 查看 Central 健康状态：Admin → Central
 
 ```bash
 curl -s http://127.0.0.1:8000/health | python3 -m json.tool
@@ -281,7 +321,7 @@ curl -s http://127.0.0.1:8000/health | python3 -m json.tool
 
 响应统计 `workers`、`leases` 和 `requests`，具体数字取决于实时数据库状态。
 
-### 4.10 Central → Worker 内部接口
+### 4.12 Central → Worker 内部接口
 
 | 接口 | 用途 |
 | --- | --- |
@@ -406,6 +446,7 @@ pytest 是自动化服务测试；Mock Cluster + smoke_test 是完整 HTTP 集�
 | `LEASE_IDLE_TIMEOUT_SECONDS` | `1800` | 正常空闲回收 |
 | `LEASE_RECLAIM_GRACE_SECONDS` | `300` | 资源紧张回收门槛 |
 | `LEASE_REAPER_INTERVAL_SECONDS` | `10` | Reaper 周期 |
+| `ADMIN_ACTION_TOKEN` | 无 | 手动管理操作 token；未配置时禁用手动释放 |
 | `MAX_BIT_SIZE` | `134217728` | bit 上限 |
 | `MAX_HWH_SIZE` | `16777216` | hwh 上限 |
 | `MAX_PREDICT_IMAGE_SIZE` | `8388608` | predict JPEG/PNG 上限 |
@@ -430,7 +471,7 @@ Lease 完全由 Central 管理，旧 `/sessions` 返回 `404`。
 
 ### 9.3 学生忘记 Release 怎么办？
 
-学生不需要 Release。Central 使用 idle timeout 和 pressure reclaim 自动回收。
+学生不需要 Release。Central 使用 idle timeout 和 pressure reclaim 自动回收；管理员也可在 Worker Detail 中释放当前安全的 READY Lease。BUSY Worker 不允许手动释放。
 
 ### 9.4 为什么同一学生下一次可能换 Worker？
 

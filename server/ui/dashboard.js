@@ -2,6 +2,7 @@
 
 // Config and state
 const STORAGE = { api: "kv260.centralApi", theme: "kv260.theme", view: "kv260.view" };
+const SESSION_STORAGE = { adminToken: "kv260.adminActionToken" };
 const DEFAULT_API = location.protocol === "file:" ? "http://127.0.0.1:8000" : location.origin;
 const state = {
   apiBase: normalizeBase(localStorage.getItem(STORAGE.api) || DEFAULT_API),
@@ -220,7 +221,57 @@ function openWorker(worker) {
   const list = node("dl", { className: "detail-grid" });
   const rows = [["Board", worker.board], ["State", stateLabel(worker.state)], ["Student", worker.student_id], ["Lease ID", worker.lease_id], ["Artifact ID", worker.artifact_id], ["FPGA Ready", worker.fpga_ready ? "Yes" : "No"], ["Last Seen", formatTime(worker.last_seen)], ["Last Error", worker.last_error]];
   for (const [label, value] of rows) list.append(node("dt", { text: label }), node("dd", { text: value || "—", title: value ? String(value) : "" }));
-  content.append(list); $("#worker-dialog").showModal();
+  content.append(list);
+  if (stateKey(worker.state) === "ready" && worker.student_id && worker.lease_id) {
+    const releaseButton = node("button", { className: "button danger", text: "释放 Worker / Release Worker", type: "button" });
+    releaseButton.addEventListener("click", () => releaseWorker(worker, releaseButton));
+    content.append(node("div", { className: "worker-actions" }, [releaseButton]));
+  }
+  $("#worker-dialog").showModal();
+}
+function adminToken() {
+  try { return sessionStorage.getItem(SESSION_STORAGE.adminToken) || ""; }
+  catch { return ""; }
+}
+function renderAdminTokenStatus() {
+  const status = $("#admin-token-status");
+  const saved = Boolean(adminToken());
+  status.className = `form-result ${saved ? "success" : ""}`;
+  status.textContent = saved ? "已为当前会话保存 / Saved for this session" : "当前会话未设置令牌 / No token set for this session";
+}
+function saveAdminToken(event) {
+  event.preventDefault();
+  const input = $("#admin-token-input"), token = input.value;
+  if (!token) return;
+  try { sessionStorage.setItem(SESSION_STORAGE.adminToken, token); }
+  catch { toast("无法保存 Admin Action Token", "error"); return; }
+  input.value = "";
+  renderAdminTokenStatus();
+  toast("Admin Action Token 已保存到当前会话", "success");
+}
+function clearAdminToken() {
+  try { sessionStorage.removeItem(SESSION_STORAGE.adminToken); }
+  catch { /* The status below remains authoritative for this page. */ }
+  $("#admin-token-input").value = "";
+  renderAdminTokenStatus();
+  toast("Admin Action Token 已清除", "success");
+}
+async function releaseWorker(worker, button) {
+  const token = adminToken();
+  if (!token) { toast("请先在 Tools 中设置 Admin Action Token", "warning"); return; }
+  if (!window.confirm(`确认释放 ${worker.board} 当前属于 ${worker.student_id} 的 Lease？`)) return;
+  const original = button.textContent; button.disabled = true; button.textContent = "Releasing...";
+  try {
+    await apiFetch(`/workers/${encodeURIComponent(worker.board)}/release`, {
+      method: "POST", headers: { "X-Admin-Token": token }, timeout: 60000,
+    });
+    $("#worker-dialog").close();
+    await Promise.allSettled([loadWorkers(), loadHealth()]);
+    toast("Worker 已释放 / Worker released", "success");
+  } catch (error) {
+    button.disabled = false; button.textContent = original;
+    toast(error.message, "error");
+  }
 }
 
 // Artifacts
@@ -456,6 +507,7 @@ function init() {
   applyTheme(localStorage.getItem(STORAGE.theme));
   $("#api-base").value = state.apiBase; $("#footer-api").textContent = state.apiBase; $("#api-docs").href = `${state.apiBase}/docs`;
   if (location.protocol === "file:" && !localStorage.getItem(STORAGE.api)) toast("当前页面以本地文件打开，请确认 Central API 地址。", "warning");
+  renderAdminTokenStatus();
   $("#save-api").addEventListener("click", () => setApiBase($("#api-base").value));
   $("#api-base").addEventListener("keydown", (event) => { if (event.key === "Enter") setApiBase(event.target.value); });
   $("#theme-button").addEventListener("click", () => { const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; localStorage.setItem(STORAGE.theme, theme); applyTheme(theme); });
@@ -471,6 +523,7 @@ function init() {
   $("#request-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.requestId = $("#request-id-input").value.trim(); if (state.requestId) queryRequest(state.requestId).catch(() => {}); });
   $("#student-request-query-form").addEventListener("submit", (event) => { event.preventDefault(); const studentId = $("#student-request-id-input").value.trim(); if (studentId) queryStudentRequests(studentId); });
   $("#student-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.studentId = $("#student-id-input").value.trim(); if (state.studentId) queryStudent(state.studentId); });
+  $("#admin-token-form").addEventListener("submit", saveAdminToken); $("#clear-admin-token").addEventListener("click", clearAdminToken);
   $("#predict-form").addEventListener("submit", submitPredict); $("#stop-polling").addEventListener("click", stopPolling);
   $("#close-dialog").addEventListener("click", () => $("#worker-dialog").close());
   $("#worker-dialog").addEventListener("click", (event) => { if (event.target === $("#worker-dialog")) $("#worker-dialog").close(); });

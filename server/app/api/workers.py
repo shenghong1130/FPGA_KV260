@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+import hmac
 
-from ..schemas import WorkerResponse
-from ..lease_manager import LeaseManager
+from fastapi import APIRouter, Header, HTTPException, Request, status
+
+from ..lease_manager import (
+    LeaseManager,
+    WorkerNotFoundError,
+    WorkerNotSafelyReleasableError,
+    WorkerReleaseError,
+)
+from ..schemas import WorkerReleaseResponse, WorkerResponse
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
@@ -25,3 +32,41 @@ async def list_workers(request: Request) -> list[WorkerResponse]:
         )
         for worker, student_id in workers
     ]
+
+
+@router.post("/{board}/release", response_model=WorkerReleaseResponse)
+async def release_worker(
+    board: str,
+    request: Request,
+    admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> WorkerReleaseResponse:
+    configured_token = request.app.state.services.settings.admin_action_token
+    if configured_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="manual admin actions are not configured",
+        )
+    if admin_token is None or not hmac.compare_digest(admin_token, configured_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid admin action token",
+        )
+
+    manager: LeaseManager = request.app.state.services.lease_manager
+    try:
+        student_id = await manager.release_worker(
+            board, f"manual UI release: {board}"
+        )
+    except WorkerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="worker not found") from exc
+    except WorkerNotSafelyReleasableError as exc:
+        raise HTTPException(
+            status_code=409, detail="worker is not safely releasable"
+        ) from exc
+    except WorkerReleaseError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"worker release failed: {exc}"
+        ) from exc
+    return WorkerReleaseResponse(
+        released=True, board=board, student_id=student_id
+    )

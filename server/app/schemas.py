@@ -89,3 +89,9 @@ class WorkerResponse(UtcResponseModel):
     fpga_ready: bool
     last_seen: datetime | None
     last_error: str | None
+
+
+class WorkerReleaseResponse(BaseModel):
+    released: bool
+    board: str
+    student_id: str

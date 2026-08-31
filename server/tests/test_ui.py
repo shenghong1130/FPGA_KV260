@@ -16,6 +16,8 @@ async def test_dashboard_index(test_context) -> None:
     assert 'id="request-table"' in response.text
     assert 'id="student-request-query-form"' in response.text
     assert 'id="student-request-table"' in response.text
+    assert "Admin Action Token" in response.text
+    assert 'id="admin-token-input"' in response.text
     assert response.text.index('id="request-query-form"') < response.text.index(
         'id="student-request-query-form"'
     ) < response.text.index("Recent Predict Requests")
@@ -35,6 +37,9 @@ async def test_dashboard_static_assets(test_context) -> None:
     assert 'renderRequests($("#student-request-table")' in javascript.text
     assert 'state.view === "requests"' in javascript.text
     assert "Completed Requests" in javascript.text
+    assert "Release Worker" in javascript.text
+    assert "sessionStorage" in javascript.text
+    assert '"X-Admin-Token": token' in javascript.text
 
 
 async def test_ui_path_redirects_to_trailing_slash(test_context) -> None:

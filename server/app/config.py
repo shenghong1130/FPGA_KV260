@@ -29,6 +29,7 @@ class Settings:
     max_bit_size: int
     max_hwh_size: int
     max_predict_image_size: int
+    admin_action_token: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -70,4 +71,5 @@ class Settings:
             max_predict_image_size=int(
                 os.getenv("MAX_PREDICT_IMAGE_SIZE", str(8 * 1024 * 1024))
             ),
+            admin_action_token=os.getenv("ADMIN_ACTION_TOKEN") or None,
         )

@@ -28,6 +28,18 @@ class RequestNotFoundError(LookupError):
     pass
 
 
+class WorkerNotFoundError(LookupError):
+    pass
+
+
+class WorkerNotSafelyReleasableError(RuntimeError):
+    pass
+
+
+class WorkerReleaseError(RuntimeError):
+    pass
+
+
 class LeaseManager:
     """Central-owned student leases and persistent predict requests."""
 
@@ -350,18 +362,71 @@ class LeaseManager:
         except asyncio.CancelledError:
             raise
 
-    async def release_student(self, student_id: str, reason: str) -> bool:
-        async with self.student_locks[student_id]:
-            return await self._release_locked(student_id, reason)
+    async def release_worker(self, board: str, reason: str) -> str:
+        with self.sessions() as database:
+            worker = database.get(Worker, board)
+            if worker is None:
+                raise WorkerNotFoundError(board)
+            if worker.state != WorkerState.READY.value or not worker.lease_id:
+                raise WorkerNotSafelyReleasableError(board)
+            lease = database.scalar(select(StudentLease).where(
+                StudentLease.worker_id == board,
+                StudentLease.lease_id == worker.lease_id,
+            ))
+            if lease is None or lease.state != LeaseStatus.READY.value:
+                raise WorkerNotSafelyReleasableError(board)
+            student_id = lease.student_id
+            lease_id = lease.lease_id
 
-    async def _release_locked(self, student_id: str, reason: str) -> bool:
+        released = await self.release_student(
+            student_id,
+            reason,
+            expected_worker_id=board,
+            expected_lease_id=lease_id,
+            raise_on_worker_error=True,
+        )
+        if not released:
+            raise WorkerNotSafelyReleasableError(board)
+        return student_id
+
+    async def release_student(
+        self,
+        student_id: str,
+        reason: str,
+        *,
+        expected_worker_id: str | None = None,
+        expected_lease_id: str | None = None,
+        raise_on_worker_error: bool = False,
+    ) -> bool:
+        async with self.student_locks[student_id]:
+            return await self._release_locked(
+                student_id,
+                reason,
+                expected_worker_id=expected_worker_id,
+                expected_lease_id=expected_lease_id,
+                raise_on_worker_error=raise_on_worker_error,
+            )
+
+    async def _release_locked(
+        self,
+        student_id: str,
+        reason: str,
+        *,
+        expected_worker_id: str | None = None,
+        expected_lease_id: str | None = None,
+        raise_on_worker_error: bool = False,
+    ) -> bool:
         # Publish RELEASING while holding the existing lock order, then close
         # the database Session before the Worker HTTP request.
         async with self.scheduler.allocation_lock:
             with self.sessions() as database:
                 lease = database.get(StudentLease, student_id)
                 if (lease is None or lease.state != LeaseStatus.READY.value or
-                        not lease.worker_id or not lease.lease_id):
+                        not lease.worker_id or not lease.lease_id or
+                        (expected_worker_id is not None and
+                         lease.worker_id != expected_worker_id) or
+                        (expected_lease_id is not None and
+                         lease.lease_id != expected_lease_id)):
                     return False
                 pending = database.scalar(select(func.count()).select_from(
                     PredictRequestRecord).where(
@@ -369,7 +434,9 @@ class LeaseManager:
                     PredictRequestRecord.status.in_([
                         RequestStatus.QUEUED.value, RequestStatus.RUNNING.value])))
                 worker = database.get(Worker, lease.worker_id)
-                if pending or worker is None or worker.state != WorkerState.READY.value:
+                if (pending or worker is None or
+                        worker.state != WorkerState.READY.value or
+                        worker.lease_id != lease.lease_id):
                     return False
                 lease_id = lease.lease_id
                 worker_board = worker.board
@@ -392,6 +459,8 @@ class LeaseManager:
                     worker.state = WorkerState.ERROR.value
                     worker.last_error = str(exc)
                     database.commit()
+            if raise_on_worker_error:
+                raise WorkerReleaseError(str(exc)) from exc
             return False
 
         async with self.scheduler.allocation_lock:

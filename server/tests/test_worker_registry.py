@@ -18,6 +18,15 @@ async def test_default_health_interval_remains_five_seconds(monkeypatch) -> None
     assert Settings.from_env().health_interval_seconds == 5.0
 
 
+async def test_admin_action_token_is_disabled_by_default_and_loaded_from_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("ADMIN_ACTION_TOKEN", raising=False)
+    assert Settings.from_env().admin_action_token is None
+    monkeypatch.setenv("ADMIN_ACTION_TOKEN", "configured-admin-token")
+    assert Settings.from_env().admin_action_token == "configured-admin-token"
+
+
 async def test_health_check_holds_no_database_transaction_during_network_wait(
     test_context,
 ) -> None:
