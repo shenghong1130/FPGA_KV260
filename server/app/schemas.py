@@ -41,6 +41,7 @@ class PredictResponse(UtcResponseModel):
     student_id: str
     artifact_id: str
     version: str
+    worker: str | None = None
     status: str
     result: dict[str, Any] | None = None
     error: str | None = None
@@ -68,6 +69,23 @@ class StudentStatusResponse(UtcResponseModel):
     worker_assigned: bool
     queued_requests: int
     running_requests: int
+    completed_requests: int
+    failed_requests: int
+    total_requests: int
+    last_activity_at: datetime | None
+
+
+class StudentSummaryResponse(UtcResponseModel):
+    student_id: str
+    latest_artifact_id: str | None
+    latest_version: str | None
+    lease_state: str
+    worker_id: str | None
+    queued_requests: int
+    running_requests: int
+    completed_requests: int
+    failed_requests: int
+    total_requests: int
     last_activity_at: datetime | None
 
 
@@ -110,6 +128,11 @@ class AuditEventResponse(UtcResponseModel):
     message: str
     details: dict[str, Any] | None = None
     created_at: datetime
+
+
+class AuditEventTypeResponse(BaseModel):
+    value: str
+    label: str
 
 
 class ArtifactCleanupItem(BaseModel):

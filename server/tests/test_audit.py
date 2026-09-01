@@ -1,11 +1,44 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
+from app.audit import AUDIT_EVENT_TYPES
 from app.worker_client import WorkerClientError
 from .conftest import password_headers, predict, upload
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_event_types_api_matches_all_business_record_calls(test_context) -> None:
+    client, _ = test_context
+    response = await client.get("/events/types")
+    assert response.status_code == 200
+    items = response.json()
+    configured = {value for value, _ in AUDIT_EVENT_TYPES}
+    assert {item["value"] for item in items} == configured
+    assert all(item["label"] for item in items)
+
+    recorded: set[str] = set()
+    app_root = Path(__file__).resolve().parents[1] / "app"
+    for path in app_root.rglob("*.py"):
+        for expression in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(expression, ast.Call)
+                and isinstance(expression.func, ast.Attribute)
+                and expression.func.attr == "record"
+                and expression.args
+                and isinstance(expression.args[0], ast.Constant)
+                and isinstance(expression.args[0].value, str)
+            ):
+                recorded.add(expression.args[0].value)
+    assert recorded <= configured
+    assert {
+        "REQUEST_CREATED", "REQUEST_STARTED", "REQUEST_COMPLETED",
+        "REQUEST_FAILED", "WORKER_ASSIGNED", "WORKER_OFFLINE",
+    } <= configured
 
 
 async def test_artifact_and_request_lifecycle_events_are_persisted(test_context) -> None:

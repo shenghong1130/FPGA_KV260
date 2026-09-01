@@ -163,6 +163,7 @@ class PredictRequestRecord(Base):
     student_id: Mapped[str] = mapped_column(String(128), index=True)
     artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), index=True)
     artifact_version: Mapped[str] = mapped_column(String(128))
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)

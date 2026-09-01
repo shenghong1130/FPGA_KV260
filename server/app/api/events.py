@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 
-from ..audit import AuditLogger
-from ..schemas import AuditEventResponse
+from ..audit import AUDIT_EVENT_TYPES, AuditLogger
+from ..schemas import AuditEventResponse, AuditEventTypeResponse
 
 router = APIRouter(prefix="/events", tags=["events"])
+
+
+@router.get("/types", response_model=list[AuditEventTypeResponse])
+async def list_event_types() -> list[AuditEventTypeResponse]:
+    return [
+        AuditEventTypeResponse(value=value, label=label)
+        for value, label in AUDIT_EVENT_TYPES
+    ]
 
 
 @router.get("", response_model=list[AuditEventResponse])

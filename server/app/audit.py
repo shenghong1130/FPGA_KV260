@@ -15,6 +15,25 @@ SENSITIVE_DETAIL_KEYS = {
     "admin_token", "x-admin-token", "x-student-password", "lease_secret",
     "worker_secret", "session_secret", "image_base64", "payload",
 }
+AUDIT_EVENT_TYPES: tuple[tuple[str, str], ...] = (
+    ("ARTIFACT_UPLOADED", "Artifact 上传"),
+    ("AUTH_FAILED", "学生认证失败"),
+    ("STUDENT_PASSWORD_CHANGED", "学生密码修改"),
+    ("REQUEST_CREATED", "Request 创建"),
+    ("REQUEST_STARTED", "Request 开始"),
+    ("REQUEST_COMPLETED", "Request 完成"),
+    ("REQUEST_FAILED", "Request 失败"),
+    ("WORKER_ASSIGNED", "Worker 分配"),
+    ("WORKER_ONLINE", "Worker 上线"),
+    ("WORKER_OFFLINE", "Worker 离线"),
+    ("WORKER_RELEASED", "Worker 释放"),
+    ("ADMIN_WORKER_RELEASE", "管理员释放 Worker"),
+    ("FPGA_DEPLOYED", "FPGA 部署成功"),
+    ("FPGA_DEPLOY_FAILED", "FPGA 部署失败"),
+    ("ARTIFACT_ARCHIVED", "Artifact 已归档"),
+    ("ARTIFACT_CLEANUP_FAILED", "Artifact 清理失败"),
+    ("ADMIN_ARTIFACT_CLEANUP", "管理员 Artifact 清理"),
+)
 
 
 class AuditLogger:

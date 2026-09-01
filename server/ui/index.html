@@ -94,15 +94,23 @@
 
     <section id="view-requests" class="view" data-view="requests" aria-labelledby="requests-title">
       <div class="section-heading"><div><h2 id="requests-title">计算请求</h2><p>Predict Requests</p></div></div>
-      <section class="panel query-panel"><h3>按 Request ID 查询</h3><form id="request-query-form" class="inline-form"><label for="request-id-input">Request ID</label><input id="request-id-input" placeholder="req_xxxxx" required><label for="request-password-input">Password</label><input id="request-password-input" type="password" maxlength="128" autocomplete="current-password" required><button class="button primary" type="submit">查询</button></form><div id="request-detail" class="detail-output empty">请输入 Request ID。</div></section>
+      <section class="panel query-panel">
+        <div class="panel-title"><div><h3>按 Worker 查询请求</h3><p>Requests by Worker</p></div></div>
+        <form id="worker-request-query-form" class="inline-form"><label for="worker-request-id-select">Worker</label><select id="worker-request-id-select" required><option value="">Loading...</option></select><label for="worker-request-range">显示范围</label><select id="worker-request-range"><option value="5">最近 5 条 / Latest 5</option><option value="all">全部 / All</option></select><button class="button primary" type="submit">查询</button></form>
+        <div id="worker-request-error" class="alert danger hidden" role="alert">加载 Worker Request 列表失败 / Failed to load Worker requests</div>
+        <p id="worker-request-summary" class="query-summary hidden"></p>
+        <div class="table-wrap"><table><thead><tr><th>Status</th><th>Request ID</th><th>Student</th><th>Artifact / Version</th><th>Worker</th><th>Created</th><th>Duration</th><th>Result</th><th>Error</th><th>Detail</th></tr></thead><tbody id="worker-request-table"><tr><td class="empty" colspan="10">请选择 Worker。</td></tr></tbody></table></div>
+      </section>
       <section class="panel query-panel">
         <div class="panel-title"><div><h3>按 Student ID 查询请求</h3><p>Requests by Student ID</p></div></div>
-        <form id="student-request-query-form" class="inline-form"><label for="student-request-id-input">Student ID</label><input id="student-request-id-input" placeholder="student01" maxlength="128" required><button class="button primary" type="submit">查询</button></form>
+        <form id="student-request-query-form" class="inline-form"><label for="student-request-id-input">Student ID</label><input id="student-request-id-input" placeholder="student01" maxlength="128" required><label for="student-request-range">显示范围</label><select id="student-request-range"><option value="5">最近 5 条 / Latest 5</option><option value="all">全部 / All</option></select><button class="button primary" type="submit">查询</button></form>
         <div id="student-request-error" class="alert danger hidden" role="alert">加载学生 Request 列表失败 / Failed to load student requests</div>
+        <p id="student-request-summary" class="query-summary hidden"></p>
         <div class="table-wrap"><table><thead><tr><th>Status</th><th>Request ID</th><th>Student</th><th>Artifact / Version</th><th>Worker</th><th>Created</th><th>Duration</th><th>Result</th><th>Error</th><th>Detail</th></tr></thead><tbody id="student-request-table"><tr><td class="empty" colspan="10">请输入 Student ID。</td></tr></tbody></table></div>
       </section>
       <section class="panel request-list-panel">
         <div class="panel-title"><div><h3>最近计算请求</h3><p>Recent Predict Requests</p></div><span class="secondary">自动刷新 / Auto refresh</span></div>
+        <div class="toolbar compact-toolbar"><label>状态<select id="request-status-filter"><option value="all">全部 / All</option><option value="queued">QUEUED</option><option value="running">RUNNING</option><option value="completed">COMPLETED</option><option value="failed">FAILED</option></select></label><span id="request-filter-count" class="secondary"></span></div>
         <div id="request-list-error" class="alert danger hidden" role="alert">加载 Request 列表失败 / Failed to load requests</div>
         <div class="table-wrap"><table><thead><tr><th>Status</th><th>Request ID</th><th>Student</th><th>Artifact / Version</th><th>Worker</th><th>Created</th><th>Duration</th><th>Result</th><th>Error</th><th>Detail</th></tr></thead><tbody id="request-table"><tr><td class="empty" colspan="10">Loading...</td></tr></tbody></table></div>
       </section>
@@ -110,14 +118,15 @@
 
     <section id="view-student" class="view" data-view="student" aria-labelledby="student-title">
       <div class="section-heading"><div><h2 id="student-title">学生状态</h2><p>Student Status</p></div></div>
-      <section class="panel query-panel"><form id="student-query-form" class="inline-form"><label for="student-id-input">Student ID</label><input id="student-id-input" placeholder="student01" maxlength="128" required><label for="student-password-input">Password</label><input id="student-password-input" type="password" maxlength="128" autocomplete="current-password" required><button class="button primary" type="submit">查询</button></form><div id="student-detail" class="detail-output empty">请输入 Student ID。</div></section>
+      <section class="panel query-panel"><label class="student-search-label" for="student-search-input">搜索 Student ID</label><input id="student-search-input" type="search" placeholder="student01" maxlength="128"><div id="student-list-error" class="alert danger hidden" role="alert">加载 Student 列表失败 / Failed to load students</div></section>
+      <div class="table-wrap panel flush"><table><thead><tr><th>Student</th><th>Latest</th><th>Lease</th><th>Worker</th><th>Queued</th><th>Running</th><th>Completed</th><th>Failed</th><th>Total</th><th>Last Activity</th><th>Actions</th></tr></thead><tbody id="student-table"><tr><td class="empty" colspan="11">Loading...</td></tr></tbody></table></div>
     </section>
 
     <section id="view-events" class="view" data-view="events" aria-labelledby="events-title">
       <div class="section-heading"><div><h2 id="events-title">系统事件</h2><p>Events</p></div></div>
       <form id="event-filter-form" class="toolbar panel">
         <label>Level<select id="event-level-filter"><option value="">全部 / All</option><option>INFO</option><option>WARNING</option><option>ERROR</option></select></label>
-        <label>Event Type<input id="event-type-filter" placeholder="REQUEST_FAILED" maxlength="64"></label>
+        <label>Event Type<select id="event-type-filter"><option value="">全部 / All</option></select></label>
         <label>Student ID<input id="event-student-filter" maxlength="128"></label>
         <label>Worker<input id="event-board-filter" placeholder="kv2601" maxlength="64"></label>
         <label>Request ID<input id="event-request-filter" placeholder="req_xxx" maxlength="64"></label>

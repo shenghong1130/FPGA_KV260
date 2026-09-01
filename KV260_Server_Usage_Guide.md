@@ -178,6 +178,7 @@ Central 自动选择该学生提交时的最新 Artifact，并生成 `request_id
   "status": "completed",
   "artifact_id": "art_xxxxx",
   "version": "v3",
+  "worker": "kv2604",
   "result": {"status": "success", "flower_api": "meiguihua", "flower_cn": "玫瑰花"},
   "error": null
 }
@@ -192,12 +193,13 @@ Central 自动选择该学生提交时的最新 Artifact，并生成 `request_id
   "status": "queued",
   "artifact_id": "art_xxxxx",
   "version": "v3",
+  "worker": null,
   "result": null,
   "error": null
 }
 ```
 
-学生响应不暴露具体 Worker 或内部 `lease_id`。没有可用 Artifact 返回 `404`。`POST /predict` 只认证已注册学生，不会自动注册 credential；认证失败发生在创建 Request、Lease 或分配 Worker 之前。
+Request 尚未执行时 `worker=null`；真正进入 RUNNING 时 Central 持久化实际 `worker`，后续 COMPLETED/FAILED 和单 Request 查询都保留该历史 Worker。响应仍不暴露内部 `lease_id`。没有可用 Artifact 返回 `404`。`POST /predict` 只认证已注册学生，不会自动注册 credential；认证失败发生在创建 Request、Lease 或分配 Worker 之前。
 
 ### 4.5 查询 Request：Student → Central
 
@@ -211,7 +213,28 @@ curl \
 
 状态可能为 `queued/running/completed/failed`。Central 分配 Worker 后会自动执行，Student 不需要重新 POST。
 
+Admin Dashboard 的 Request 列表、按 Student 查询和按 Worker 查询使用只读列表接口，不需要 Student Password：
+
+```bash
+# 全局最近 100 条
+curl 'http://127.0.0.1:8000/requests?limit=100'
+
+# student01 最近 5 条
+curl 'http://127.0.0.1:8000/requests?student_id=student01&limit=5'
+
+# student01 全部历史
+curl 'http://127.0.0.1:8000/requests?student_id=student01&all=true'
+
+# kv2601 最近 5 条及全部历史
+curl 'http://127.0.0.1:8000/requests?worker_id=kv2601&limit=5'
+curl 'http://127.0.0.1:8000/requests?worker_id=kv2601&all=true'
+```
+
+`all=true` 必须同时指定 `student_id` 或 `worker_id`；`GET /requests?all=true` 返回 `422`，防止无意中读取整个系统的无限历史。列表始终按 `created_at DESC, request_id DESC` 排序。Dashboard 顺序是 Worker Query、Student Query、Recent Requests；两个定向查询均支持最近 5 条/全部，“最近计算请求”仍只加载最近 100 条并在浏览器中按 Status Filter 过滤。Request 表和 Detail 的 Worker 可点击跳转 Workers 页面。
+
 ### 4.6 查询学生状态：Student / Admin → Central
+
+Student 查询自己的状态时继续使用受密码保护的接口：
 
 ```bash
 curl \
@@ -228,11 +251,22 @@ curl \
   "worker_assigned": true,
   "queued_requests": 0,
   "running_requests": 0,
+  "completed_requests": 153,
+  "failed_requests": 2,
+  "total_requests": 155,
   "last_activity_at": "..."
 }
 ```
 
-不会返回具体 Worker。
+这个接口不会返回具体 Worker。缺少或错误的 Student Password 均返回 `401`。
+
+Admin Dashboard 使用无需 Student Password 的只读汇总接口：
+
+```bash
+curl http://127.0.0.1:8000/students
+```
+
+`GET /students` 合并 Artifact、StudentCredential、StudentLease 和 PredictRequest 中出现的 Student ID，因此已经上传 Artifact 但没有 Lease 的 Student 也会显示。每项只返回 Student ID、最新 READY Artifact、Lease state、`worker_id`、四类 Request 数量、总数和最后活动时间；绝不返回 password、hash、salt、Credential 或 Admin Token。Dashboard 的 Student 页面支持模糊搜索，并可跳转到该 Student 的 Requests、Artifacts 和 Events。
 
 ### 4.7 修改学生密码：Student → Central
 
@@ -342,7 +376,10 @@ Dashboard 通过 `系统事件 / Events` 页面查看和筛选 Level、Event Typ
 ```bash
 curl 'http://127.0.0.1:8000/events?limit=100'
 curl 'http://127.0.0.1:8000/events?level=ERROR&student_id=student01'
+curl 'http://127.0.0.1:8000/events/types'
 ```
+
+Event Type 下拉选项由 `GET /events/types` 从 Central 的统一 `AUDIT_EVENT_TYPES` 注册表生成，不在 Dashboard HTML 中重复硬编码。
 
 Audit 不保存学生密码、密码 hash/salt、Admin Token、lease/worker secret 或 predict 图片/base64 payload。Audit 数据库写入失败只写普通 error log，不会令 Artifact 上传、FPGA predict 或 Worker 调度失败。
 

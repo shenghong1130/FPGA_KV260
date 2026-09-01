@@ -3,7 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException, Request, status as http_status
 
 from ..lease_manager import LeaseManager
-from ..schemas import PasswordChangeRequest, PasswordChangeResponse, StudentStatusResponse
+from ..schemas import (
+    PasswordChangeRequest,
+    PasswordChangeResponse,
+    StudentStatusResponse,
+    StudentSummaryResponse,
+)
 from ..student_auth import (
     InvalidStudentCredentialsError,
     PasswordPolicyError,
@@ -11,6 +16,12 @@ from ..student_auth import (
 )
 
 router = APIRouter(prefix="/students", tags=["students"])
+
+
+@router.get("", response_model=list[StudentSummaryResponse])
+async def list_students(request: Request) -> list[StudentSummaryResponse]:
+    manager: LeaseManager = request.app.state.services.lease_manager
+    return [StudentSummaryResponse(**item) for item in await manager.list_students()]
 
 
 @router.get("/{student_id}/status", response_model=StudentStatusResponse)

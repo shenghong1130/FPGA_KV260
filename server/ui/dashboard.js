@@ -6,9 +6,11 @@ const SESSION_STORAGE = { adminToken: "kv260.adminActionToken" };
 const DEFAULT_API = location.protocol === "file:" ? "http://127.0.0.1:8000" : location.origin;
 const state = {
   apiBase: normalizeBase(localStorage.getItem(STORAGE.api) || DEFAULT_API),
-  health: null, workers: [], artifacts: [], requests: [], studentRequests: [], events: [], cleanupPreview: null, lastSuccess: null,
+  health: null, workers: [], artifacts: [], requests: [], students: [], studentRequests: [], workerRequests: [], events: [], eventTypes: [], cleanupPreview: null, lastSuccess: null,
   view: "overview", workerState: "all", artifactLimit: 100,
-  studentId: "", requestId: "", polling: null,
+  studentSearch: "", artifactStudentFilter: "", studentRequestStudentId: "",
+  studentRequestRange: "5", workerRequestWorkerId: "", workerRequestRange: "5",
+  requestStatusFilter: "all", polling: null,
 };
 const statusText = {
   idle: "空闲", reserved: "已预留", deploying: "正在部署", ready: "已分配",
@@ -128,6 +130,56 @@ function route() {
   $$('[data-nav]').forEach((link) => link.classList.toggle("active", link.dataset.nav === state.view));
   refreshCurrent(true);
 }
+function navigateToStudent(studentId) {
+  if (!studentId) return;
+  state.studentSearch = studentId;
+  $("#student-search-input").value = studentId;
+  for (const selector of ["#worker-dialog", "#request-dialog"]) {
+    const dialog = $(selector); if (dialog.open) dialog.close();
+  }
+  if (state.view === "student") renderStudents();
+  location.hash = "#/student";
+}
+function navigateToStudentRequests(studentId) {
+  state.studentRequestStudentId = studentId;
+  state.studentRequestRange = "5";
+  $("#student-request-id-input").value = studentId;
+  $("#student-request-range").value = "5";
+  if (state.view === "requests") queryStudentRequests(studentId, "5");
+  location.hash = "#/requests";
+}
+function navigateToStudentArtifacts(studentId) {
+  state.artifactStudentFilter = studentId;
+  $("#artifact-student-filter").value = studentId;
+  if (state.view === "artifacts") renderArtifacts();
+  location.hash = "#/artifacts";
+}
+function navigateToStudentEvents(studentId) {
+  $("#event-student-filter").value = studentId;
+  if (state.view === "events") loadEvents();
+  location.hash = "#/events";
+}
+function navigateToWorker(board) {
+  if (!board) return;
+  $("#worker-search").value = board;
+  const dialog = $("#request-dialog"); if (dialog.open) dialog.close();
+  if (state.view === "workers") renderWorkers();
+  location.hash = "#/workers";
+}
+function studentLink(studentId) {
+  if (!studentId) return document.createTextNode("—");
+  const button = node("button", { className: "link-button student-link", text: studentId, type: "button" });
+  button.addEventListener("click", (event) => { event.stopPropagation(); navigateToStudent(studentId); });
+  button.addEventListener("keydown", (event) => event.stopPropagation());
+  return button;
+}
+function workerLink(board) {
+  if (!board) return document.createTextNode("—");
+  const button = node("button", { className: "link-button worker-link", text: board, type: "button" });
+  button.addEventListener("click", (event) => { event.stopPropagation(); navigateToWorker(board); });
+  button.addEventListener("keydown", (event) => event.stopPropagation());
+  return button;
+}
 
 // Health and overview
 async function loadHealth() {
@@ -184,18 +236,39 @@ async function loadWorkers() {
   try {
     const data = (await apiFetch("/workers")).data;
     state.workers = Array.isArray(data) ? data.sort((a, b) => naturalCompare(a.board, b.board)) : [];
-    renderWorkers();
+    renderWorkers(); renderWorkerRequestOptions();
   } catch (error) { toast(error.message, "error"); }
+}
+function renderWorkerRequestOptions() {
+  const select = $("#worker-request-id-select");
+  const selected = state.workerRequestWorkerId || select.value;
+  clear(select);
+  if (!state.workers.length) {
+    const option = node("option", { text: "暂无 Worker / No workers" }); option.value = ""; select.append(option); return;
+  }
+  for (const worker of state.workers) {
+    const option = node("option", { text: `${worker.board} (${stateKey(worker.state).toUpperCase()})` });
+    option.value = worker.board; select.append(option);
+  }
+  if (state.workers.some((worker) => worker.board === selected)) select.value = selected;
 }
 function workerCard(worker) {
   const key = stateKey(worker.state);
-  const button = node("button", { className: `worker-card state-${key}`, type: "button" });
+  const card = node("div", { className: `worker-card state-${key}` });
+  card.tabIndex = 0; card.setAttribute("role", "button");
   const badge = node("span", { className: `state-badge status-${key}` }, [node("span", { text: key.toUpperCase() }), node("small", { text: statusText[key] || "未知" })]);
-  button.append(node("div", { className: "worker-head" }, [node("strong", { text: worker.board || "—" }), badge]));
+  card.append(node("div", { className: "worker-head" }, [node("strong", { text: worker.board || "—" }), badge]));
   const fields = node("dl", { className: "worker-fields" });
   const pairs = [["Student", worker.student_id], ["Artifact", worker.artifact_id], ["FPGA Ready", worker.fpga_ready ? "Yes" : "No"], ["Last Seen", relativeTime(worker.last_seen)], ["Error", worker.last_error]];
-  for (const [label, value] of pairs) fields.append(node("dt", { text: label }), node("dd", { text: value || "—", title: value ? String(value) : "" }));
-  button.append(fields); button.addEventListener("click", () => openWorker(worker)); return button;
+  for (const [label, value] of pairs) {
+    const detail = node("dd", { title: value ? String(value) : "" });
+    detail.append(label === "Student" ? studentLink(value) : document.createTextNode(value || "—"));
+    fields.append(node("dt", { text: label }), detail);
+  }
+  card.append(fields);
+  card.addEventListener("click", () => openWorker(worker));
+  card.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openWorker(worker); } });
+  return card;
 }
 function filteredWorkers() {
   const query = $("#worker-search").value.trim().toLowerCase();
@@ -220,7 +293,11 @@ function openWorker(worker) {
   const content = $("#worker-dialog-content"); clear(content);
   const list = node("dl", { className: "detail-grid" });
   const rows = [["Board", worker.board], ["State", stateLabel(worker.state)], ["Student", worker.student_id], ["Lease ID", worker.lease_id], ["Artifact ID", worker.artifact_id], ["FPGA Ready", worker.fpga_ready ? "Yes" : "No"], ["Last Seen", formatTime(worker.last_seen)], ["Last Error", worker.last_error]];
-  for (const [label, value] of rows) list.append(node("dt", { text: label }), node("dd", { text: value || "—", title: value ? String(value) : "" }));
+  for (const [label, value] of rows) {
+    const detail = node("dd", { title: value ? String(value) : "" });
+    detail.append(label === "Student" ? studentLink(value) : document.createTextNode(value || "—"));
+    list.append(node("dt", { text: label }), detail);
+  }
   content.append(list);
   if (stateKey(worker.state) === "ready" && worker.student_id && worker.lease_id) {
     const releaseButton = node("button", { className: "button danger", text: "释放 Worker / Release Worker", type: "button" });
@@ -291,7 +368,7 @@ function latestVersions() {
   return result;
 }
 function filteredArtifacts() {
-  const student = $("#artifact-student-filter").value.trim().toLowerCase();
+  const student = state.artifactStudentFilter.trim().toLowerCase();
   const artifactId = $("#artifact-id-filter").value.trim().toLowerCase();
   const status = $("#artifact-status-filter").value.toLowerCase();
   const latest = latestVersions();
@@ -307,7 +384,8 @@ function renderArtifacts() {
     if (versionNumber(item.version) === latest.get(item.student_id)) version.append(node("span", { className: "latest", text: "Latest" }));
     const idCell = node("td", { className: "mono", text: shortHash(item.artifact_id), title: item.artifact_id }); idCell.append(copyButton(item.artifact_id, "复制"));
     const sha = node("td", { className: "mono" }); sha.append(node("span", { text: `BIT ${shortHash(item.bit_sha256)} · HWH ${shortHash(item.hwh_sha256)}` }), copyButton(item.bit_sha256, "BIT"), copyButton(item.hwh_sha256, "HWH"));
-    [node("td", { text: item.student_id || "—" }), version, idCell, node("td", { className: `status-${stateKey(item.status)}`, text: stateLabel(item.status) }), node("td", { text: formatBytes(item.bit_size) }), node("td", { text: formatBytes(item.hwh_size) }), node("td", { text: formatTime(item.created_at), title: item.created_at }), sha].forEach((cell) => row.append(cell));
+    const student = node("td"); student.append(studentLink(item.student_id));
+    [student, version, idCell, node("td", { className: `status-${stateKey(item.status)}`, text: stateLabel(item.status) }), node("td", { text: formatBytes(item.bit_size) }), node("td", { text: formatBytes(item.hwh_size) }), node("td", { text: formatTime(item.created_at), title: item.created_at }), sha].forEach((cell) => row.append(cell));
     body.append(row);
   }
   $("#artifact-show-more").classList.toggle("hidden", shown.length >= all.length);
@@ -316,7 +394,11 @@ function renderRecentArtifacts() {
   const body = $("#recent-artifacts"); clear(body);
   const recent = state.artifacts.slice(0, 5);
   if (!recent.length) { const row = node("tr"); const cell = node("td", { className: "empty", text: "暂无 Artifact" }); cell.colSpan = 4; row.append(cell); body.append(row); return; }
-  for (const item of recent) { const row = node("tr"); [item.student_id, item.version, stateLabel(item.status), formatTime(item.created_at)].forEach((value) => row.append(node("td", { text: value }))); body.append(row); }
+  for (const item of recent) {
+    const row = node("tr"), student = node("td"); student.append(studentLink(item.student_id)); row.append(student);
+    [item.version, stateLabel(item.status), formatTime(item.created_at)].forEach((value) => row.append(node("td", { text: value })));
+    body.append(row);
+  }
 }
 async function uploadArtifact(form) {
   const result = $(".form-result", form.parentElement); clear(result); result.className = "form-result";
@@ -342,7 +424,8 @@ function renderCleanupPreview() {
   $("#cleanup-reclaimable").textContent = formatBytes(preview.reclaimable_bytes);
   for (const item of preview.artifacts) {
     const row = node("tr");
-    [item.student_id, item.version, item.artifact_id, formatBytes(item.size)].forEach((value) => row.append(node("td", { className: String(value).startsWith("art_") ? "mono" : "", text: value })));
+    const student = node("td"); student.append(studentLink(item.student_id)); row.append(student);
+    [item.version, item.artifact_id, formatBytes(item.size)].forEach((value) => row.append(node("td", { className: String(value).startsWith("art_") ? "mono" : "", text: value })));
     body.append(row);
   }
   if (!preview.artifacts.length) { const row = node("tr"); const cell = node("td", { className: "empty", text: "没有可安全清理的旧版本 / No cleanup candidates" }); cell.colSpan = 4; row.append(cell); body.append(row); }
@@ -384,6 +467,22 @@ function eventFilters() {
     request_id: $("#event-request-filter").value.trim(),
   };
 }
+async function loadEventTypes() {
+  try {
+    const data = (await apiFetch("/events/types")).data;
+    state.eventTypes = Array.isArray(data) ? data : [];
+    const select = $("#event-type-filter"), selected = select.value;
+    clear(select);
+    const all = node("option", { text: "全部 / All" }); all.value = ""; select.append(all);
+    for (const item of state.eventTypes) {
+      const option = node("option", { text: `${item.value} / ${item.label}` });
+      option.value = item.value; select.append(option);
+    }
+    if (state.eventTypes.some((item) => item.value === selected)) select.value = selected;
+  } catch (error) {
+    toast(`加载 Event Type 失败：${error.message}`, "error");
+  }
+}
 async function loadEvents() {
   const params = new URLSearchParams({ limit: "100" });
   for (const [key, value] of Object.entries(eventFilters())) if (value) params.set(key, value);
@@ -403,7 +502,8 @@ function renderEvents() {
   for (const item of state.events) {
     const row = node("tr");
     const level = stateKey(item.level);
-    [node("td", { text: formatTime(item.created_at), title: item.created_at }), node("td", { className: `status-${level}`, text: item.level }), node("td", { className: "mono", text: item.event_type }), node("td", { text: item.student_id || "—" }), node("td", { text: item.board || "—" }), node("td", { className: "mono", text: shortHash(item.artifact_id), title: item.artifact_id || "" }), node("td", { className: "mono", text: shortHash(item.request_id), title: item.request_id || "" }), node("td", { text: item.message, title: item.details ? JSON.stringify(item.details) : "" })].forEach((cell) => row.append(cell));
+    const student = node("td"); student.append(studentLink(item.student_id));
+    [node("td", { text: formatTime(item.created_at), title: item.created_at }), node("td", { className: `status-${level}`, text: item.level }), node("td", { className: "mono", text: item.event_type }), student, node("td", { text: item.board || "—" }), node("td", { className: "mono", text: shortHash(item.artifact_id), title: item.artifact_id || "" }), node("td", { className: "mono", text: shortHash(item.request_id), title: item.request_id || "" }), node("td", { text: item.message, title: item.details ? JSON.stringify(item.details) : "" })].forEach((cell) => row.append(cell));
     body.append(row);
   }
 }
@@ -447,12 +547,19 @@ async function loadRequests() {
     const data = (await apiFetch("/requests?limit=100")).data;
     state.requests = Array.isArray(data) ? data : [];
     errorBox.classList.add("hidden");
-    renderRequests();
+    renderRecentRequests();
   } catch (error) {
     errorBox.textContent = `加载 Request 列表失败 / Failed to load requests：${error.message}`;
     errorBox.classList.remove("hidden");
-    if (!state.requests.length) renderRequests();
+    if (!state.requests.length) renderRecentRequests();
   }
+}
+function renderRecentRequests() {
+  const filtered = state.requestStatusFilter === "all"
+    ? state.requests
+    : state.requests.filter((item) => stateKey(item.status) === state.requestStatusFilter);
+  $("#request-filter-count").textContent = `显示 ${filtered.length} / ${state.requests.length} 条`;
+  renderRequests($("#request-table"), filtered);
 }
 function renderRequests(body = $("#request-table"), requests = state.requests, emptyMessage = "暂无计算请求 / No predict requests") {
   clear(body);
@@ -467,11 +574,13 @@ function renderRequests(body = $("#request-table"), requests = state.requests, e
     const requestId = node("td", { className: "mono", text: shortHash(item.request_id), title: item.request_id });
     const artifact = node("td", { className: "mono", text: `${shortHash(item.artifact_id)} / ${item.version || "—"}`, title: `${item.artifact_id || ""} / ${item.version || ""}` });
     const result = node("td"); result.append(requestResultSummary(item.result, item.status));
+    const student = node("td"); student.append(studentLink(item.student_id));
+    const worker = node("td"); worker.append(workerLink(item.worker));
     const detailButton = node("button", { className: "link-button", text: "详情 / Detail", type: "button" });
     detailButton.addEventListener("click", (event) => { event.stopPropagation(); openRequest(item); });
     [
       node("td", { className: `status-${key}`, text: stateLabel(item.status) }), requestId,
-      node("td", { text: item.student_id || "—" }), artifact, node("td", { text: item.worker || "—" }),
+      student, artifact, worker,
       node("td", { text: formatTime(item.created_at), title: item.created_at }), node("td", { text: requestDuration(item) }),
       result, node("td", { className: "request-error", text: item.error || "—", title: item.error || "" }), node("td", {}, [detailButton]),
     ].forEach((cell) => row.append(cell));
@@ -480,13 +589,52 @@ function renderRequests(body = $("#request-table"), requests = state.requests, e
     body.append(row);
   }
 }
-async function queryStudentRequests(studentId) {
+async function queryWorkerRequests(board, range = state.workerRequestRange) {
+  state.workerRequestWorkerId = board;
+  state.workerRequestRange = range;
+  $("#worker-request-id-select").value = board;
+  $("#worker-request-range").value = range;
+  const errorBox = $("#worker-request-error");
+  try {
+    const path = range === "all"
+      ? `/requests?worker_id=${encodeURIComponent(board)}&all=true`
+      : `/requests?worker_id=${encodeURIComponent(board)}&limit=5`;
+    const data = (await apiFetch(path, { timeout: range === "all" ? 30000 : 5000 })).data;
+    state.workerRequests = Array.isArray(data) ? data : [];
+    errorBox.classList.add("hidden");
+    const summary = $("#worker-request-summary");
+    summary.textContent = range === "all"
+      ? `${board} · 全部 ${state.workerRequests.length} 条`
+      : `${board} · 最近 5 条`;
+    summary.classList.remove("hidden");
+    renderRequests(
+      $("#worker-request-table"), state.workerRequests,
+      `该 Worker 暂无计算请求 / No predict requests for ${board}`,
+    );
+  } catch (error) {
+    errorBox.textContent = `加载 Worker Request 列表失败 / Failed to load Worker requests：${error.message}`;
+    errorBox.classList.remove("hidden");
+    if (!state.workerRequests.length) renderRequests($("#worker-request-table"), []);
+  }
+}
+async function queryStudentRequests(studentId, range = state.studentRequestRange) {
+  state.studentRequestStudentId = studentId;
+  state.studentRequestRange = range;
+  $("#student-request-id-input").value = studentId;
+  $("#student-request-range").value = range;
   const errorBox = $("#student-request-error");
   try {
-    const path = `/requests?student_id=${encodeURIComponent(studentId)}&limit=100`;
-    const data = (await apiFetch(path)).data;
+    const path = range === "all"
+      ? `/requests?student_id=${encodeURIComponent(studentId)}&all=true`
+      : `/requests?student_id=${encodeURIComponent(studentId)}&limit=5`;
+    const data = (await apiFetch(path, { timeout: range === "all" ? 30000 : 5000 })).data;
     state.studentRequests = Array.isArray(data) ? data : [];
     errorBox.classList.add("hidden");
+    const summary = $("#student-request-summary");
+    summary.textContent = range === "all"
+      ? `${studentId} · 全部 ${state.studentRequests.length} 条`
+      : `${studentId} · 最近 5 条`;
+    summary.classList.remove("hidden");
     renderRequests(
       $("#student-request-table"), state.studentRequests,
       `该学生暂无计算请求 / No predict requests for ${studentId}`,
@@ -506,23 +654,69 @@ function openRequest(item) {
     ["Created At", formatTime(item.created_at)], ["Started At", formatTime(item.started_at)],
     ["Completed At", formatTime(item.completed_at)], ["Duration", requestDuration(item)], ["Error", item.error],
   ];
-  for (const [label, value] of rows) list.append(node("dt", { text: label }), node("dd", { text: value ?? "—" }));
+  for (const [label, value] of rows) {
+    const detail = node("dd");
+    if (label === "Student ID") detail.append(studentLink(value));
+    else if (label === "Worker") detail.append(workerLink(value));
+    else detail.append(document.createTextNode(value ?? "—"));
+    list.append(node("dt", { text: label }), detail);
+  }
   content.append(list, node("h3", { text: "Result" }), node("pre", { text: JSON.stringify(item.result, null, 2) }));
   $("#request-dialog").showModal();
 }
-async function queryRequest(requestId, target = $("#request-detail"), password = $("#request-password-input").value) {
+async function queryRequest(requestId, target = $("#predict-result"), password = $("#predict-password").value) {
   try {
     const item = (await apiFetch(`/requests/${encodeURIComponent(requestId)}`, { headers: { "X-Student-Password": password } })).data;
-    renderDetail(target, [["Request ID", item.request_id], ["Student", item.student_id], ["Artifact", item.artifact_id], ["Version", item.version], ["Status", stateLabel(item.status)], ["Error", item.error]], item.result);
+    renderDetail(target, [["Request ID", item.request_id], ["Student", item.student_id], ["Artifact", item.artifact_id], ["Version", item.version], ["Worker", item.worker], ["Status", stateLabel(item.status)], ["Error", item.error]], item.result);
     return item;
   } catch (error) { target.className = "detail-output empty"; target.textContent = error.status === 404 ? "未找到 Request / Request not found" : error.message; throw error; }
 }
-async function queryStudent(studentId) {
-  const target = $("#student-detail");
+async function loadStudents() {
+  const errorBox = $("#student-list-error");
   try {
-    const item = (await apiFetch(`/students/${encodeURIComponent(studentId)}/status`, { headers: { "X-Student-Password": $("#student-password-input").value } })).data;
-    renderDetail(target, [["Student ID", item.student_id], ["Latest Artifact", item.latest_artifact_id], ["Latest Version", item.latest_version], ["Lease State", stateLabel(item.lease_state)], ["Worker Assigned", item.worker_assigned ? "Yes" : "No"], ["Queued Requests", item.queued_requests], ["Running Requests", item.running_requests], ["Last Activity", formatTime(item.last_activity_at)]]);
-  } catch (error) { target.className = "detail-output empty"; target.textContent = error.message; }
+    const data = (await apiFetch("/students")).data;
+    state.students = Array.isArray(data) ? data : [];
+    errorBox.classList.add("hidden"); renderStudents();
+  } catch (error) {
+    errorBox.textContent = `加载 Student 列表失败 / Failed to load students：${error.message}`;
+    errorBox.classList.remove("hidden"); if (!state.students.length) renderStudents();
+  }
+}
+function studentAction(label, handler) {
+  const button = node("button", { className: "link-button", text: label, type: "button" });
+  button.addEventListener("click", handler); return button;
+}
+function renderStudents() {
+  const body = $("#student-table"); clear(body);
+  const search = state.studentSearch.trim().toLowerCase();
+  const students = state.students
+    .filter((item) => !search || String(item.student_id).toLowerCase().includes(search))
+    .sort((a, b) => naturalCompare(a.student_id, b.student_id));
+  if (!students.length) {
+    const row = node("tr"), cell = node("td", { className: "empty", text: "暂无 Student / No students" });
+    cell.colSpan = 11; row.append(cell); body.append(row); return;
+  }
+  for (const item of students) {
+    const row = node("tr"), actions = node("td", { className: "student-actions" });
+    actions.append(
+      studentAction("Requests", () => navigateToStudentRequests(item.student_id)),
+      studentAction("Artifacts", () => navigateToStudentArtifacts(item.student_id)),
+      studentAction("Events", () => navigateToStudentEvents(item.student_id)),
+    );
+    const student = node("td"); student.append(studentLink(item.student_id));
+    [
+      student,
+      node("td", { text: item.latest_version || "—", title: item.latest_artifact_id || "" }),
+      node("td", { className: `status-${stateKey(item.lease_state)}`, text: stateLabel(item.lease_state) }),
+      node("td", { text: item.worker_id || "—" }),
+      node("td", { text: item.queued_requests }), node("td", { text: item.running_requests }),
+      node("td", { text: item.completed_requests }), node("td", { text: item.failed_requests }),
+      node("td", { text: item.total_requests }),
+      node("td", { text: formatTime(item.last_activity_at), title: item.last_activity_at || "" }),
+      actions,
+    ].forEach((cell) => row.append(cell));
+    body.append(row);
+  }
 }
 
 // Predict tester
@@ -537,7 +731,7 @@ async function submitPredict(event) {
   try {
     const response = await apiFetch("/predict", { method: "POST", headers: { "Content-Type": "application/json", "X-Student-Password": password }, body: JSON.stringify({ student_id: student, payload }), timeout: 60000 });
     const item = response.data;
-    renderDetail(target, [["Request ID", item.request_id], ["Student", item.student_id], ["Artifact", item.artifact_id], ["Version", item.version], ["Status", stateLabel(item.status)], ["Error", item.error]], item.result);
+    renderDetail(target, [["Request ID", item.request_id], ["Student", item.student_id], ["Artifact", item.artifact_id], ["Version", item.version], ["Worker", item.worker], ["Status", stateLabel(item.status)], ["Error", item.error]], item.result);
     if (response.status === 202 || stateKey(item.status) === "queued") { toast("请求已排队 / Queued", "warning"); startPolling(item.request_id, password); } else toast("请求完成 / Completed", "success");
   } catch (error) { target.className = "detail-output empty"; target.textContent = error.message; toast(error.message, "error"); }
   finally { button.disabled = false; }
@@ -557,15 +751,26 @@ function stopPolling() { if (state.polling) clearInterval(state.polling); state.
 
 // Unified refresh manager
 let refreshTimer = null;
-async function refreshCurrent(force = false) {
+async function refreshCurrent(force = false, manual = false) {
   clearTimeout(refreshTimer);
   const tasks = [];
   if (state.view === "overview") tasks.push(loadHealth(), loadWorkers(), loadArtifacts());
   else if (state.view === "workers") tasks.push(loadHealth(), loadWorkers());
   else if (state.view === "artifacts") tasks.push(loadArtifacts());
-  else if (state.view === "requests") tasks.push(loadRequests());
-  else if (state.view === "student" && state.studentId) tasks.push(queryStudent(state.studentId));
-  else if (state.view === "events") tasks.push(loadEvents());
+  else if (state.view === "requests") {
+    tasks.push(loadRequests(), loadWorkers());
+    if (state.workerRequestWorkerId && (state.workerRequestRange !== "all" || manual)) {
+      tasks.push(queryWorkerRequests(state.workerRequestWorkerId, state.workerRequestRange));
+    }
+    if (state.studentRequestStudentId && (state.studentRequestRange !== "all" || manual)) {
+      tasks.push(queryStudentRequests(state.studentRequestStudentId, state.studentRequestRange));
+    }
+  }
+  else if (state.view === "student") tasks.push(loadStudents());
+  else if (state.view === "events") {
+    tasks.push(loadEvents());
+    if (!state.eventTypes.length) tasks.push(loadEventTypes());
+  }
   if (force) await Promise.allSettled(tasks);
   const visible = document.visibilityState === "visible";
   const normal = state.view === "artifacts" ? 10000 : ["student", "events"].includes(state.view) ? 5000 : 2000;
@@ -578,7 +783,7 @@ function setApiBase(value) {
   try { new URL(normalized); } catch { toast("Central API URL 无效", "error"); return; }
   state.apiBase = normalized; localStorage.setItem(STORAGE.api, normalized);
   $("#api-base").value = normalized; $("#footer-api").textContent = normalized;
-  $("#api-docs").href = `${normalized}/docs`; state.health = null; state.workers = []; state.artifacts = []; state.requests = []; state.studentRequests = []; state.events = []; state.cleanupPreview = null;
+  $("#api-docs").href = `${normalized}/docs`; state.health = null; state.workers = []; state.artifacts = []; state.requests = []; state.students = []; state.studentRequests = []; state.workerRequests = []; state.events = []; state.eventTypes = []; state.cleanupPreview = null;
   toast("Central API 地址已保存", "success"); refreshCurrent(true);
 }
 function init() {
@@ -589,19 +794,23 @@ function init() {
   $("#save-api").addEventListener("click", () => setApiBase($("#api-base").value));
   $("#api-base").addEventListener("keydown", (event) => { if (event.key === "Enter") setApiBase(event.target.value); });
   $("#theme-button").addEventListener("click", () => { const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; localStorage.setItem(STORAGE.theme, theme); applyTheme(theme); });
-  $("#refresh-button").addEventListener("click", () => refreshCurrent(true));
+  $("#refresh-button").addEventListener("click", () => refreshCurrent(true, true));
   addEventListener("hashchange", route); document.addEventListener("visibilitychange", () => refreshCurrent(true));
   $$('[data-go]').forEach((button) => button.addEventListener("click", () => { location.hash = `#/${button.dataset.go}`; }));
   $("#worker-alert").addEventListener("click", () => { $("#worker-state-filter").value = "issues"; location.hash = "#/workers"; renderWorkers(); });
   $("#worker-search").addEventListener("input", renderWorkers); $("#worker-state-filter").addEventListener("change", renderWorkers);
-  ["#artifact-student-filter", "#artifact-id-filter"].forEach((id) => $(id).addEventListener("input", renderArtifacts));
+  $("#artifact-student-filter").addEventListener("input", (event) => { state.artifactStudentFilter = event.target.value; renderArtifacts(); });
+  $("#artifact-id-filter").addEventListener("input", renderArtifacts);
   $("#artifact-status-filter").addEventListener("change", renderArtifacts); $("#artifact-latest-only").addEventListener("change", renderArtifacts);
   $("#artifact-show-more").addEventListener("click", () => { state.artifactLimit += 100; renderArtifacts(); });
   $("#cleanup-preview-button").addEventListener("click", previewCleanup); $("#cleanup-execute-button").addEventListener("click", executeCleanup);
   $$('[data-upload-form]').forEach((form) => form.addEventListener("submit", (event) => { event.preventDefault(); uploadArtifact(form); }));
-  $("#request-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.requestId = $("#request-id-input").value.trim(); if (state.requestId) queryRequest(state.requestId).catch(() => {}); });
-  $("#student-request-query-form").addEventListener("submit", (event) => { event.preventDefault(); const studentId = $("#student-request-id-input").value.trim(); if (studentId) queryStudentRequests(studentId); });
-  $("#student-query-form").addEventListener("submit", (event) => { event.preventDefault(); state.studentId = $("#student-id-input").value.trim(); if (state.studentId) queryStudent(state.studentId); });
+  $("#worker-request-query-form").addEventListener("submit", (event) => { event.preventDefault(); const board = $("#worker-request-id-select").value, range = $("#worker-request-range").value; if (board) queryWorkerRequests(board, range); });
+  $("#worker-request-range").addEventListener("change", (event) => { const board = $("#worker-request-id-select").value; state.workerRequestRange = event.target.value; if (board) queryWorkerRequests(board, state.workerRequestRange); });
+  $("#student-request-query-form").addEventListener("submit", (event) => { event.preventDefault(); const studentId = $("#student-request-id-input").value.trim(), range = $("#student-request-range").value; if (studentId) queryStudentRequests(studentId, range); });
+  $("#student-request-range").addEventListener("change", (event) => { const studentId = $("#student-request-id-input").value.trim(); state.studentRequestRange = event.target.value; if (studentId) queryStudentRequests(studentId, state.studentRequestRange); });
+  $("#request-status-filter").addEventListener("change", (event) => { state.requestStatusFilter = event.target.value; renderRecentRequests(); });
+  $("#student-search-input").addEventListener("input", (event) => { state.studentSearch = event.target.value; renderStudents(); });
   $("#event-filter-form").addEventListener("submit", (event) => { event.preventDefault(); loadEvents(); });
   $("#admin-token-form").addEventListener("submit", saveAdminToken); $("#clear-admin-token").addEventListener("click", clearAdminToken);
   $("#predict-form").addEventListener("submit", submitPredict); $("#stop-polling").addEventListener("click", stopPolling);

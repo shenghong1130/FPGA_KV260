@@ -18,6 +18,7 @@ def response_for(record: PredictRequestRecord) -> PredictResponse:
     return PredictResponse(
         request_id=record.id, student_id=record.student_id,
         artifact_id=record.artifact_id, version=record.artifact_version,
+        worker=record.worker_id,
         status=record.status.lower(), result=record.result, error=record.error,
     )
 
@@ -29,7 +30,7 @@ def list_response_for(record: PredictRequestRecord) -> PredictRequestListItem:
         artifact_id=record.artifact_id,
         version=record.artifact_version,
         status=record.status.lower(),
-        worker=None,
+        worker=record.worker_id,
         created_at=record.created_at,
         started_at=record.started_at,
         completed_at=record.completed_at,
@@ -97,9 +98,20 @@ async def list_requests(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     student_id: str | None = Query(default=None, min_length=1, max_length=128),
+    worker_id: str | None = Query(default=None, min_length=1, max_length=64),
+    all_requests: bool = Query(default=False, alias="all"),
 ) -> list[PredictRequestListItem]:
+    if all_requests and student_id is None and worker_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="all=true requires student_id or worker_id",
+        )
     manager: LeaseManager = request.app.state.services.lease_manager
-    records = await manager.list_requests(limit, student_id)
+    records = await manager.list_requests(
+        None if all_requests else limit,
+        student_id,
+        worker_id,
+    )
     return [list_response_for(record) for record in records]
 
 

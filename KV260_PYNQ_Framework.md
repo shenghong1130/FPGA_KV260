@@ -385,7 +385,7 @@ create → QUEUED → RUNNING → COMPLETED
                     └─────→ FAILED
 ```
 
-QUEUED 已持久化未执行；RUNNING 已进入 Worker 调用；COMPLETED 保存 result/time；FAILED 保存 error/time，RUNNING 工作不自动重放。
+QUEUED 已持久化未执行且 `worker_id=null`；转为 RUNNING 的同一事务会保存实际 `worker_id`。COMPLETED 保存 result/time，执行失败的 FAILED 保存 error/time，二者都永久保留历史 Worker；RUNNING 工作不自动重放，也不能用 Student 当前 Lease 猜测历史 Worker。
 
 ### 8.3 StudentLease
 
@@ -541,7 +541,7 @@ FastAPI → SQLAlchemy ORM → SQLite → server/data/central.db(default)
 | `student_credentials` | student_id、password_salt/hash、created/updated | 不含 plaintext password |
 | `workers` | board/base_url/state、lease/current artifact、fpga_ready、seen/error | Central Worker 持久化视图；lease 映射 legacy `session_id` column |
 | `student_leases` | student/lease/worker/current artifact、state、times/count/error | Student ↔ Worker ownership |
-| `predict_requests` | id/student/artifact/version/status/payload/result/times/error | persistent Queue/history；202 后仍存在 |
+| `predict_requests` | id/student/artifact/version/worker/status/payload/result/times/error | persistent Queue/history及实际执行 Worker；202 后仍存在 |
 | `audit_events` | id/type/level/actor、student/board/artifact/request、message/details/time | Persistent history |
 | `sessions` | legacy SessionRecord | compatibility only，不是当前调度核心 |
 
@@ -551,7 +551,7 @@ FastAPI → SQLAlchemy ORM → SQLite → server/data/central.db(default)
 - `student_credentials`：`student_id`、`password_salt`、`password_hash`、`created_at`、`updated_at`，绝无 plaintext password。
 - `workers`：`board`、`base_url`、`state`、`lease_id`、`current_artifact_id`、`fpga_ready`、`last_seen`、`last_error`。
 - `student_leases`：`student_id`、`lease_id`、`worker_id`、`current_artifact_id`、`state`、`created_at`、`queued_at`、`activated_at`、`last_activity_at`、`released_at`、`request_count`、`error`。
-- `predict_requests`：`id/request_id`、`student_id`、`artifact_id`、`artifact_version`、`status`、`payload`、`result`、`created_at`、`started_at`、`completed_at`、`error`。
+- `predict_requests`：`id/request_id`、`student_id`、`artifact_id`、`artifact_version`、`worker_id`、`status`、`payload`、`result`、`created_at`、`started_at`、`completed_at`、`error`。`worker_id` 是 Request 真正开始 FPGA 执行时的历史 board，不随后续 Lease 改变。
 - `audit_events`：`id`、`event_type`、`level`、`actor_type/id`、`student_id`、`board`、`artifact_id`、`request_id`、`message`、`details`、`created_at`。
 - `sessions`：legacy `id/student/artifact/worker/status`、生命周期时间、request count 和 error；它只为既有数据库非破坏兼容。
 
@@ -571,7 +571,7 @@ StudentCredential     Artifact
 AuditEvent logical refs: student_id / artifact_id / request_id / board
 ```
 
-只有 `PredictRequestRecord.artifact_id` 和 legacy `SessionRecord.artifact_id` 声明了到 Artifact 的实际 ForeignKey；Lease/Worker/Audit 关联由代码维护，不应说成不存在的 FK。业务表说明“现在是什么状态”，Audit 说明“以前发生过什么”。
+只有 `PredictRequestRecord.artifact_id` 和 legacy `SessionRecord.artifact_id` 声明了到 Artifact 的实际 ForeignKey；Request 的 `worker_id`、Lease/Worker/Audit 关联由代码维护。业务表说明“现在是什么状态”，Request `worker_id` 保存实际执行历史，Audit 说明“以前发生过什么”。
 
 ```text
 Central Persistence
@@ -615,7 +615,7 @@ LOGGER.info/warning/error → console/journalctl
 AuditLogger.record → audit_events/SQLite → Dashboard Events / GET /events
 ```
 
-AuditLogger 用独立短事务，失败只 `LOGGER.exception`，不令主业务失败；details 过滤 password/hash/salt、Admin Token、secret、payload、`image_base64`。
+AuditLogger 用独立短事务，失败只 `LOGGER.exception`，不令主业务失败；details 过滤 password/hash/salt、Admin Token、secret、payload、`image_base64`。`GET /events/types` 从统一 `AUDIT_EVENT_TYPES` 注册表提供 Dashboard Event Type 下拉选项。
 
 ```text
 ARTIFACT_UPLOADED → REQUEST_CREATED → WORKER_ASSIGNED
@@ -647,7 +647,10 @@ Latest READY、Active Worker/Lease、QUEUED/RUNNING Artifact 永远保护。仅 
 ## 15. Central 重启恢复
 
 ```text
-restart → open SQLite/create missing tables → initialize Services
+restart → open SQLite/create missing tables
+ → additive migration: add Request.worker_id/index when absent
+ → backfill NULL historical worker_id from Request Audit board
+ → initialize Services
  → WorkerRegistry.sync_config()
  → LeaseManager.recover_requests()
     ├─ QUEUED stays QUEUED
@@ -670,7 +673,7 @@ Central --internal API + lease_id--------> Worker --PYNQ--> FPGA
 | 边界 | 当前接口 |
 | --- | --- |
 | Student → Central | Artifact upload/query、predict、single Request、Student status/password |
-| Admin → Central | health/workers/global requests/events、manual release、cleanup |
+| Admin → Central | health/workers、global/student/worker requests、event types/events、manual release、cleanup |
 | Central → Worker | health/status、internal deploy、predict、internal release |
 
 单 Request 查询按所属 student 验证密码；全局 Request/Event 是 Admin Dashboard 视图。公开 Session API 已移除。
@@ -821,7 +824,7 @@ TonyPi Robot
 6. httpx 是 Central 调用 KV260 Worker 的 HTTP 客户端。
 7. Worker 使用 PYNQ Overlay 和 DMA 操作 FPGA。
 8. FPGA 结果经 Worker → httpx → LeaseManager 返回 Central。
-9. Central 通过 SQLAlchemy 把 Request result、状态和完成时间写回 SQLite。
+9. Central 在 Request 进入 RUNNING 时保存实际 `worker_id`，完成后再通过 SQLAlchemy 把 result、状态和完成时间写回 SQLite。
 10. FastAPI 最终把 HTTP Response 返回 TonyPi；若先返回 `202`，Robot 后续按 `request_id` 查询。
 
 简化图中的直接 `/predict` 仅适用于 StudentLease 和 Worker 的 `current_artifact_id` 都等于 Request 的 `artifact_id`，且 Worker 状态正确的情况。否则必须先部署：
@@ -854,7 +857,7 @@ direct predict
 
 ### 19.3 当前能力、测试与限制
 
-已实现 Student scrypt password、Artifact version、persistent Request Queue、StudentLease、Lazy Allocation、FIFO、deploy once/predict many、idle/LRU/manual release、Worker offline/recovery、Central restart recovery、Audit/Event、ARCHIVED、Artifact Cleanup 和真实花卉 DMA adapter。
+已实现 Student scrypt password、Artifact version、persistent Request Queue/Worker history、StudentLease、Lazy Allocation、FIFO、deploy once/predict many、idle/LRU/manual release、Worker offline/recovery、Central restart recovery、Audit/Event、ARCHIVED、Artifact Cleanup 和真实花卉 DMA adapter。Dashboard 支持按 Worker/Student 查询 Request，Events 的 Event Type 由 Central 注册表生成。
 
 Server pytest 覆盖认证、Artifact、Request、调度、并发、恢复、Audit、Cleanup、UI；Worker pytest/fake DMA 覆盖 ownership、Overlay、preprocessing、ABI；Mock Cluster 验证 HTTP contract但不等于真实 FPGA 验证。
 

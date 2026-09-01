@@ -13,7 +13,7 @@ from .audit import AuditLogger
 from .config import Settings
 from .db_models import (
     Artifact, ArtifactStatus, LeaseStatus, PredictRequestRecord, RequestStatus,
-    StudentLease, Worker, WorkerState, utcnow,
+    StudentCredential, StudentLease, Worker, WorkerState, utcnow,
 )
 from .scheduler import Scheduler
 from .worker_client import WorkerClient, WorkerClientError
@@ -146,36 +146,88 @@ class LeaseManager:
             return record
 
     async def list_requests(
-        self, limit: int, student_id: str | None = None
+        self,
+        limit: int | None,
+        student_id: str | None = None,
+        worker_id: str | None = None,
     ) -> list[PredictRequestRecord]:
         with self.sessions() as database:
             query = select(PredictRequestRecord)
             if student_id is not None:
                 query = query.where(PredictRequestRecord.student_id == student_id)
+            if worker_id is not None:
+                query = query.where(PredictRequestRecord.worker_id == worker_id)
             query = query.order_by(
                 PredictRequestRecord.created_at.desc(),
                 PredictRequestRecord.id.desc(),
-            ).limit(limit)
+            )
+            if limit is not None:
+                query = query.limit(limit)
             return list(database.scalars(query).all())
 
     async def student_status(self, student_id: str) -> dict[str, Any]:
         with self.sessions() as database:
-            artifact = self._latest_artifact(database, student_id)
-            lease = database.get(StudentLease, student_id)
-            counts = dict(database.execute(select(
-                PredictRequestRecord.status, func.count()
-            ).where(PredictRequestRecord.student_id == student_id).group_by(
-                PredictRequestRecord.status)).all())
-            return {
-                "student_id": student_id,
-                "latest_artifact_id": artifact.id if artifact else None,
-                "latest_version": artifact.version if artifact else None,
-                "lease_state": (lease.state if lease else LeaseStatus.UNASSIGNED.value).lower(),
-                "worker_assigned": bool(lease and lease.worker_id),
-                "queued_requests": counts.get(RequestStatus.QUEUED.value, 0),
-                "running_requests": counts.get(RequestStatus.RUNNING.value, 0),
-                "last_activity_at": lease.last_activity_at if lease else None,
-            }
+            summary = self._student_summary(database, student_id)
+            worker_id = summary.pop("worker_id")
+            summary["worker_assigned"] = bool(worker_id)
+            return summary
+
+    async def list_students(self) -> list[dict[str, Any]]:
+        with self.sessions() as database:
+            student_ids: set[str] = set()
+            for model in (
+                Artifact,
+                StudentCredential,
+                StudentLease,
+                PredictRequestRecord,
+            ):
+                student_ids.update(database.scalars(
+                    select(model.student_id).distinct()
+                ).all())
+            return [
+                self._student_summary(database, student_id)
+                for student_id in sorted(student_ids)
+            ]
+
+    def _student_summary(
+        self, database: Session, student_id: str
+    ) -> dict[str, Any]:
+        artifact = self._latest_artifact(database, student_id)
+        lease = database.get(StudentLease, student_id)
+        counts = dict(database.execute(select(
+            PredictRequestRecord.status, func.count()
+        ).where(PredictRequestRecord.student_id == student_id).group_by(
+            PredictRequestRecord.status)).all())
+        latest_request_at = database.scalar(select(
+            PredictRequestRecord.created_at
+        ).where(PredictRequestRecord.student_id == student_id).order_by(
+            PredictRequestRecord.created_at.desc(),
+            PredictRequestRecord.id.desc(),
+        ).limit(1))
+        last_activity_at = (
+            lease.last_activity_at if lease else latest_request_at
+        )
+        if last_activity_at is None and artifact is not None:
+            last_activity_at = artifact.created_at
+        queued = counts.get(RequestStatus.QUEUED.value, 0)
+        running = counts.get(RequestStatus.RUNNING.value, 0)
+        completed = counts.get(RequestStatus.COMPLETED.value, 0)
+        failed = counts.get(RequestStatus.FAILED.value, 0)
+        return {
+            "student_id": student_id,
+            "latest_artifact_id": artifact.id if artifact else None,
+            "latest_version": artifact.version if artifact else None,
+            "lease_state": (
+                lease.state if lease else LeaseStatus.UNASSIGNED.value
+            ).lower(),
+            "worker_id": lease.worker_id if lease else None,
+            "queued_requests": queued,
+            "running_requests": running,
+            "completed_requests": completed,
+            "failed_requests": failed,
+            "total_requests": queued + running + completed + failed,
+            "last_activity_at": last_activity_at,
+        }
 
     async def list_workers(self) -> list[tuple[Worker, str | None]]:
         with self.sessions() as database:
@@ -356,6 +408,7 @@ class LeaseManager:
                 worker_board = worker.board
                 worker_base_url = worker.base_url
                 request_payload = dict(record.payload)
+                record.worker_id = worker_board
                 record.status = RequestStatus.RUNNING.value
                 record.started_at = utcnow()
                 started_at = record.started_at
