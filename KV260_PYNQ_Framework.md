@@ -162,81 +162,9 @@ Student 保存自己的密码，上传同一次 build 的 bit/hwh，提交图片
 
 Worker 校验 Central 下发的 ownership 和 Artifact，保存本地副本，加载 Overlay，用单个 hardware lock 串行访问 FPGA，并按正确 Lease release。Student 不直连 Worker。
 
-## 4. Student Password 与 Admin Action 认证
+## 4. 端到端完整业务流程
 
-```text
-student_id + password → StudentAuth.authenticate_or_register()
-   ├─ credential absent
-   │    → length 8..128 → random 32-byte salt
-   │    → scrypt(N=2^14,r=8,p=1,dklen=64)
-   │    → store salt + hash
-   └─ credential exists
-        → derive candidate → hmac.compare_digest
-```
-
-第一次成功 Artifact 上传注册 credential。明文 password 不写数据库。以后上传仍用 form password；predict、单 Request、Student status/改密用 `X-Student-Password`。改密先验证旧密码，再生成新 salt/hash 并更新 `updated_at`。
-
-```text
-X-Admin-Token → ADMIN_ACTION_TOKEN(Settings)
-      → hmac.compare_digest
-      → manual Worker release / Artifact Cleanup
-```
-
-Admin Token 与 Student Password 完全分离。未配置返回 `503`，缺失/错误返回 `401`。Dashboard 仅以 `sessionStorage` 保存 token，不写死、不放入 URL/Toast/Audit。
-
-## 5. Artifact 内容与持久化
-
-```text
-Student Artifact
-├── design.bit
-│    └─ FPGA configuration bitstream
-├── design.hwh
-│    └─ Hardware metadata: AXI IP / address map / DMA information
-└── Central metadata
-     ├─ artifact_id / student_id / version
-     ├─ bit_sha256 / hwh_sha256
-     ├─ bit_size / hwh_size
-     ├─ bit_path / hwh_path
-     └─ created_at / status
-```
-
-`design.bit + design.hwh` 必须来自同一次 build。ArtifactStore 在 staging 分块写入，验证扩展名、非空、size、SHA-256 和 HWH XML，再在 `version_allocation_lock` 内分配版本、生成 `manifest.json`、原子移动目录并提交 DB metadata。
-
-```text
-Upload → validate → SHA/XML → version lock → manifest
-       → server/data/artifacts/art_<uuid>/
-       → Artifact row in SQLite
-```
-
-文件系统保存可部署实体，SQLite 保存身份、版本、hash、size、路径和状态。当前 validation 失败会清理 staging，不创建 FAILED row；`FAILED` 虽在 Enum 中，但不是当前失败上传的落库路径。
-
-## 6. Artifact 版本与 Overlay 复用
-
-```text
-student01: upload #1→v1 → #2→v2 → #3→v3 → cleanup old → #4→v4
-student02: v1 → v2
-student03: v1
-```
-
-版本按 Student 独立单调递增；ARCHIVED row 仍参与历史最大版本计算，不重用旧号。
-
-```text
-latest=v3 → create req_A(v3)
-              ↓ Student uploads v4
-req_A still v3；new req_B uses v4
-```
-
-Request 创建瞬间固定 `artifact_id + artifact_version`。Overlay 遵循：
-
-```text
-first v3 request → deploy v3 → predict → READY
-next v3 request  → skip deploy → predict
-new v4 request   → deploy v4 → predict
-```
-
-只有 Lease 与 Worker 的 `current_artifact_id` 同时匹配，且 Worker 为 READY/BUSY，才复用 Overlay。
-
-## 7. 最大端到端流程
+这是从 Student/Robot 第一次上传 bit/hwh，到后续提交图片、Central 分配 KV260、部署 Overlay、执行 FPGA 推理并返回结果的完整生命周期。它串联认证、Artifact 持久化、Request、Lease、Scheduler、Worker 和 FPGA，最终将结果持久化并返回调用方。
 
 ```text
 Student first upload(student_id/password/bit/hwh)
@@ -272,7 +200,9 @@ result
                               → Lease QUEUED / Worker ERROR
 ```
 
-## 8. Predict 的 200/202 与 Queue
+## 5. Predict 200/202 与持久化排队流程
+
+`POST /predict` 从 Robot 提交图片开始，先由 Central 认证并持久化 Request，再根据 Worker 是否可用决定同步完成或进入后台队列。这个流程保证暂时没有空闲板卡时，请求仍有稳定的 `request_id` 和可恢复的数据库状态。
 
 ```text
 Robot POST /predict
@@ -285,9 +215,43 @@ Robot POST /predict
                   Robot GET /requests/{id}
 ```
 
-收到 `202` 后不要重新 POST。Request 的 payload、Artifact 和状态已在 SQLite。StudentLease 按首次 `queued_at` FIFO，同一 Student 只占一个 Queue 位置；其多个 Request 按 `created_at,id` FIFO。
+`202` 表示“请求已经被 Central 接收并持久化，但当前还没有完成”，不是请求失败。收到 `202` 后不要重新 POST 同一个计算，而应使用返回的 `request_id` 查询；Request 的 payload、Artifact 和状态已经在 SQLite。StudentLease 按首次 `queued_at` FIFO，同一 Student 只占一个 Queue 位置；其多个 Request 按 `created_at,id` FIFO。
 
-## 9. Worker、Lease、Queue 与回收
+## 6. Worker、Lease、Queue 分配与回收流程
+
+这个流程从一个需要计算的 Student Request 开始，由 StudentLease 表达排队与 ownership，再由 Scheduler 把最老的 queued Student 分配给 IDLE Worker。计算结束后 Lease 可以继续复用，也可以通过 idle timeout、LRU pressure 或安全的管理员操作进入统一释放路径。
+
+```text
+Student Request
+      ↓
+StudentLease
+      ↓
+QUEUED
+      ↓
+Scheduler
+      ↓
+IDLE Worker
+      ↓
+RESERVED
+      ↓
+DEPLOYING
+      ↓
+READY
+      ↓
+BUSY
+      ↓
+READY
+      ↓
+┌───────────────┬─────────────────┐
+│               │                 │
+next Request  idle timeout    LRU / Admin
+│               │                 │
+BUSY         RELEASING        RELEASING
+                │                 │
+                └───────┬─────────┘
+                        ▼
+                       IDLE
+```
 
 ```text
                     Central Background Tasks
@@ -299,7 +263,7 @@ Robot POST /predict
       Scheduler        release_student()     workers/leases DB
 ```
 
-### 9.1 IDLE Worker
+### 6.1 IDLE Worker
 
 ```text
 Request → Lease QUEUED → Scheduler → kv2603 IDLE
@@ -307,14 +271,14 @@ Request → Lease QUEUED → Scheduler → kv2603 IDLE
  → Request RUNNING + Worker/Lease BUSY
 ```
 
-### 9.2 20 块全部占用
+### 6.2 20 块全部占用
 
 ```text
 Student01→kv2601 ... Student20→kv26020
 Student21 → Request QUEUED + Lease QUEUED → HTTP 202 → persistent waiting
 ```
 
-### 9.3 Idle Timeout
+### 6.3 Idle Timeout
 
 ```text
 kv2601 READY + no queued/running request
@@ -323,7 +287,7 @@ kv2601 READY + no queued/running request
  → Worker IDLE + Lease UNASSIGNED + ownership cleared
 ```
 
-### 9.4 LRU Pressure Reclaim
+### 6.4 LRU Pressure Reclaim
 
 ```text
 Student A/kv2601
@@ -337,7 +301,7 @@ Student A/kv2601
 
 Reaper 按 `last_activity_at` 从最久未用的 READY Lease 检查。所有来源最终复用 `release_student()`。
 
-### 9.5 Admin Manual Release
+### 6.5 Admin Manual Release
 
 ```text
 Dashboard + Admin Token → POST /workers/{board}/release
@@ -349,7 +313,7 @@ Dashboard + Admin Token → POST /workers/{board}/release
 
 它不是 force kill，不取消 RUNNING Request；前端不能指定 owner。
 
-### 9.6 Worker Offline
+### 6.6 Worker Offline
 
 ```text
 health/status failures → threshold → Worker OFFLINE
@@ -359,7 +323,26 @@ health/status failures → threshold → Worker OFFLINE
       └─ QUEUED remains → Reaper requeues Lease → allocator later retries
 ```
 
-## 10. KV260 Worker、PYNQ 与 Hardware ABI
+## 7. KV260 Worker、PYNQ 与 FPGA 执行流程
+
+这一层发生在 Central 已经确定某个 Worker 和 Artifact 之后。Central 本身不直接操作 FPGA，而是通过 httpx 调用 KV260 Worker；Worker 再使用 PYNQ Overlay 和 AXI DMA 驱动 FPGA，最后把推理结果沿原路径返回 Central。
+
+```text
+Central
+   │
+   │ POST /internal/deploy
+   ▼
+KV260 Worker
+   │
+   ▼
+PYNQ Overlay
+   │
+   ▼
+axi_dma_0
+   │
+   ▼
+FPGA
+```
 
 ```text
 Central /internal/deploy
@@ -383,9 +366,9 @@ Central /predict
 
 ABI 固定：输入 `(3,28,28)` float32 = 9408 bytes；输出 `(12,)` float32 = 48 bytes；IP 是 Simple DMA `axi_dma_0`。接收先 arm。`confidence` 是 argmax 对应原始硬件值，不做 softmax。Release 释放 CMA buffer/ownership；PL 可能保留 bitstream，下一次 deploy 覆盖。
 
-## 11. 状态机与同步关系
+## 8. 状态机与同步关系
 
-### 11.1 Artifact
+### 8.1 Artifact
 
 ```text
 successful upload → READY → old + safe Admin Cleanup → ARCHIVED
@@ -395,7 +378,7 @@ FAILED enum exists, but current upload path does not persist a failed row
 
 ARCHIVED ≠ 删除 DB row；只有 READY 可被 latest selection/deploy。
 
-### 11.2 PredictRequest
+### 8.2 PredictRequest
 
 ```text
 create → QUEUED → RUNNING → COMPLETED
@@ -404,7 +387,7 @@ create → QUEUED → RUNNING → COMPLETED
 
 QUEUED 已持久化未执行；RUNNING 已进入 Worker 调用；COMPLETED 保存 result/time；FAILED 保存 error/time，RUNNING 工作不自动重放。
 
-### 11.3 StudentLease
+### 8.3 StudentLease
 
 ```text
 UNASSIGNED → QUEUED → RESERVED → DEPLOYING → READY ↔ BUSY
@@ -419,7 +402,7 @@ READY 表示 Student 仍独占 Worker，不表示 Worker 可分配。
 
 `UNASSIGNED` 没有 ownership；`QUEUED` 等待资源；`RESERVED` 已原子获得 board/lease_id；`DEPLOYING` 正在进行远端 Overlay 请求；`READY` 已占用且可接任务；`BUSY` 正在执行 Request；`RELEASING` 正在调用 Worker release；`ERROR/LOST` 表示操作失败或 ownership/连通性丢失。
 
-### 11.4 Worker
+### 8.4 Worker
 
 ```text
 OFFLINE/ERROR → successful reconcile → IDLE
@@ -432,7 +415,7 @@ READY -- Lease=RELEASING; Worker enum has no RELEASING --> IDLE on success
 
 `IDLE` 才是可分配状态；`RESERVED` 已被 Scheduler 占用；`DEPLOYING` 正在加载 Artifact；`READY` 已被某个 Lease 占用但当前不计算；`BUSY` 正在计算；`ERROR` 是 ownership/操作异常；`OFFLINE` 是健康检查确认不可达。
 
-### 11.5 同步关系
+### 8.5 同步关系
 
 ```text
 StudentLease       Worker          PredictRequest
@@ -450,7 +433,101 @@ UNASSIGNED       IDLE               —
 Worker OFFLINE → Lease LOST → RUNNING Request FAILED
 ```
 
-## 12. Central Persistent Database
+## 9. Student Password 与 Admin Action 认证
+
+认证机制在业务状态机之外保护两类不同用途的入口：Student Password 用于学生上传、预测与查看自身数据；Admin Action Token 仅用于手动释放 Worker、Artifact Cleanup 等破坏性管理操作。二者相互独立，均不会以明文进入业务数据库或 Audit。
+
+### 9.1 Student Password
+
+```text
+student_id + password → StudentAuth.authenticate_or_register()
+   ├─ credential absent
+   │    → length 8..128 → random 32-byte salt
+   │    → scrypt(N=2^14,r=8,p=1,dklen=64)
+   │    → store salt + hash
+   └─ credential exists
+        → derive candidate → hmac.compare_digest
+```
+
+第一次成功 Artifact 上传注册 credential。明文 password 不写数据库。以后上传仍用 form password；predict、单 Request、Student status/改密用 `X-Student-Password`。改密先验证旧密码，再生成新 salt/hash 并更新 `updated_at`。
+
+### 9.2 Admin Action Token
+
+```text
+X-Admin-Token → ADMIN_ACTION_TOKEN(Settings)
+      → hmac.compare_digest
+      → manual Worker release / Artifact Cleanup
+```
+
+Admin Token 与 Student Password 完全分离。未配置返回 `503`，缺失/错误返回 `401`。Dashboard 仅以 `sessionStorage` 保存 token，不写死、不放入 URL/Toast/Audit。
+
+## 10. Artifact 内容、持久化、版本与 Overlay 复用
+
+Artifact 同时包含可部署文件、持久化 metadata 和按 Student 独立递增的版本。Request 在创建时绑定具体 Artifact；Worker 只有在当前 ownership、Artifact 和状态都匹配时才复用已经加载的 Overlay。
+
+### 10.1 Artifact 文件组成
+
+```text
+Student Artifact
+├── design.bit
+│    └─ FPGA configuration bitstream
+├── design.hwh
+│    └─ Hardware metadata: AXI IP / address map / DMA information
+├── manifest.json
+│    └─ Artifact identity, version, hashes and sizes
+└── Central metadata
+     ├─ artifact_id / student_id / version
+     ├─ bit_sha256 / hwh_sha256
+     ├─ bit_size / hwh_size
+     ├─ bit_path / hwh_path
+     └─ created_at / status
+```
+
+`design.bit + design.hwh` 必须来自同一次 build；`manifest.json` 由 Central 在验证并分配版本后生成。
+
+### 10.2 Artifact 持久化流程
+
+ArtifactStore 在 staging 分块写入，验证扩展名、非空、size、SHA-256 和 HWH XML，再在 `version_allocation_lock` 内分配版本、生成 `manifest.json`、原子移动目录并提交 DB metadata。
+
+```text
+Upload → staging → validate → SHA/XML → version lock → manifest
+       → atomic move to server/data/artifacts/art_<uuid>/
+       → Artifact row in SQLite
+```
+
+文件系统保存可部署实体，SQLite 保存身份、版本、hash、size、路径和状态。当前 validation 失败会清理 staging，不创建 FAILED row；`FAILED` 虽在 Enum 中，但不是当前失败上传的落库路径。
+
+### 10.3 Artifact 版本规则
+
+```text
+student01: upload #1→v1 → #2→v2 → #3→v3 → cleanup old → #4→v4
+student02: v1 → v2
+student03: v1
+```
+
+版本按 Student 独立单调递增；ARCHIVED row 仍参与历史最大版本计算，不重用旧号。只有 `READY` Artifact 会参与 latest selection，ARCHIVED Artifact 保留 metadata 和历史版本号，但不能再次 deploy。
+
+### 10.4 Request 与 Artifact 绑定
+
+```text
+latest=v3 → create req_A(v3)
+              ↓ Student uploads v4
+req_A still v3；new req_B uses v4
+```
+
+Request 创建瞬间固定 `artifact_id + artifact_version`，后续上传新版本不会改变已存在 Request 使用的 Artifact。
+
+### 10.5 Overlay 复用规则
+
+```text
+first v3 request → deploy v3 → predict → READY
+next v3 request  → skip deploy → predict
+new v4 request   → deploy v4 → predict
+```
+
+只有 StudentLease 与 Worker 的 `current_artifact_id` 同时匹配 Request 的 `artifact_id`，且 Worker 状态正确，才复用 Overlay；否则必须先通过 `/internal/deploy` 加载目标 Artifact。
+
+## 11. Central Persistent Database
 
 ```text
 FastAPI → SQLAlchemy ORM → SQLite → server/data/central.db(default)
@@ -515,7 +592,7 @@ Audit Events                   allocator_event / background Tasks
 
 Lock 用于 concurrency safety，Database 用于 persistence。进程内锁不支持多 Uvicorn worker。
 
-## 13. Worker Registry、Health 与 Ownership Recovery
+## 12. Worker Registry、Health 与 Ownership Recovery
 
 ```text
 workers.json → sync_config → workers table
@@ -530,7 +607,7 @@ Phase C: fresh DB read + reconcile
 
 普通 Monitor 不用旧 response 覆盖 RESERVED/DEPLOYING/BUSY/RELEASING transition。正常监控连续失败达到 threshold 才 OFFLINE；startup recovery 立即检查。只有实际状态变化才记录一次 WORKER_OFFLINE/ONLINE，不记录每轮成功 polling。
 
-## 14. Audit / Event
+## 13. Audit / Event
 
 ```text
 LOGGER.info/warning/error → console/journalctl
@@ -548,7 +625,7 @@ ARTIFACT_UPLOADED → REQUEST_CREATED → WORKER_ASSIGNED
 
 当前还记录 `AUTH_FAILED`、`STUDENT_PASSWORD_CHANGED`、`WORKER_OFFLINE/ONLINE/RELEASED`、`ADMIN_WORKER_RELEASE`、`ARTIFACT_ARCHIVED`、`ARTIFACT_CLEANUP_FAILED`、`ADMIN_ARTIFACT_CLEANUP`。不记录每次 health/status success、UI GET、完整 payload、图片 base64、密码或 token。
 
-## 15. Artifact Cleanup
+## 14. Artifact Cleanup
 
 ```text
 Admin token → GET cleanup-preview → calculate protected set
@@ -567,7 +644,7 @@ Admin token → GET cleanup-preview → calculate protected set
 
 Latest READY、Active Worker/Lease、QUEUED/RUNNING Artifact 永远保护。仅 COMPLETED/FAILED 历史引用的旧实体可归档，metadata/Request 关系保留。单项失败不设 ARCHIVED且继续其他项；目录已缺失可安全归档，freed bytes=0。
 
-## 16. Central 重启恢复
+## 15. Central 重启恢复
 
 ```text
 restart → open SQLite/create missing tables → initialize Services
@@ -582,7 +659,7 @@ restart → open SQLite/create missing tables → initialize Services
 
 RUNNING 不自动 replay。SQLite 与 Artifact files 仍在；locks/events/tasks 在新 process 重建。
 
-## 17. API 边界
+## 16. API 边界
 
 ```text
 Student --public API + Student Password--> Central
@@ -598,7 +675,7 @@ Central --internal API + lease_id--------> Worker --PYNQ--> FPGA
 
 单 Request 查询按所属 student 验证密码；全局 Request/Event 是 Admin Dashboard 视图。公开 Session API 已移除。
 
-## 18. 20 板共享模型
+## 17. 20 板共享模型
 
 ```text
                          Central Scheduler
@@ -614,7 +691,7 @@ Student U → no IDLE → Request/Lease QUEUED FIFO
 
 20 台健康板最多约 20 个活跃 Student Lease。每板可连续执行多个当前 Student 的 FIFO Request，但硬件串行。Scheduler 在 IDLE 候选中随机选，所以物理板号只在当前 Lease 生命周期内固定。
 
-## 19. 并发与故障隔离
+## 18. 并发与故障隔离
 
 ```text
 same Student → student_lock
@@ -627,9 +704,155 @@ same Student → student_lock
 
 统一锁顺序是 student lock → allocation lock。Artifact version、credential、cleanup 另有范围明确的 lock；Worker hardware lock 是最后一道保护。慢 deploy/predict/health 期间不持有 DB Session，返回后重新核对 ownership，防止旧结果复活 released/LOST Lease。Audit 故障隔离于主业务；Cleanup 和 manual release 都不能 force-kill BUSY 工作。
 
-## 20. 当前实现、Dashboard、测试与限制
+## 19. 当前实现、Dashboard、测试与限制
 
 当前是 FastAPI + SQLAlchemy + SQLite + asyncio + httpx 的单进程 Central，配套原生 HTML/CSS/JavaScript Dashboard。Dashboard 有 Overview、Workers、Artifacts、Requests、Student、Events、Tools；Admin Token 只在 sessionStorage。
+
+### 19.1 Central 软件栈关系
+
+```text
+机器人 / 浏览器 / curl
+        │
+        │ HTTP 请求
+        ▼
+┌─────────────────────┐
+│       FastAPI       │
+│   接收和返回 HTTP    │
+└─────────┬───────────┘
+          │
+          │ 调用业务逻辑
+          ▼
+┌─────────────────────┐
+│       asyncio       │
+│ 并发调度 / 等待 / 锁 │
+└──────┬────────┬─────┘
+       │        │
+       │        │
+       ▼        ▼
+ SQLAlchemy    httpx
+     │           │
+     │           │ HTTP
+     ▼           ▼
+   SQLite      KV260 Worker
+ central.db      :8080
+```
+
+| 技术 | 当前项目中的作用 |
+| --- | --- |
+| FastAPI | 对外提供 HTTP API，接收 Robot、Student、Dashboard 和 curl 请求 |
+| asyncio | 管理异步任务、Worker 调度、等待、Event 和 Lock |
+| SQLAlchemy | Python 与 SQLite 之间的 ORM / 数据访问层 |
+| SQLite | 持久化 Artifact metadata、Request、Lease、Worker、Credential 和 Audit Event |
+| httpx | Central 主动访问 KV260 Worker |
+
+FastAPI 负责“别人访问 Central”，httpx 负责“Central 访问 Worker”；SQLAlchemy 负责操作数据，SQLite 负责持久化数据，asyncio 负责并发和调度。
+
+### 19.2 一次 `/predict` 的真实调用链
+
+下面用一次 TonyPi Robot 请求把 Central 的 Web、调度、持久化和 Worker/FPGA 执行组件连接起来。图中以已经满足直接 predict 条件的路径为主；需要加载或切换 Artifact 时，Central 会先执行后面的 deploy 分支。
+
+```text
+TonyPi Robot
+    │
+    │ HTTP POST /predict
+    ▼
+FastAPI
+    │
+    │ 接收 student_id + image
+    ▼
+LeaseManager
+    │
+    │ asyncio.Lock
+    ▼
+SQLAlchemy
+    │
+    │ 查 Student / Artifact / Lease
+    ▼
+SQLite central.db
+    │
+    │ 找到：
+    │ student01
+    │ latest Artifact v4
+    │ Worker kv2601
+    ▼
+LeaseManager
+    │
+    │ asyncio 调度
+    ▼
+httpx
+    │
+    │ POST http://kv2601:8080/predict
+    ▼
+KV260 Worker
+    │
+    ▼
+PYNQ
+    │
+    ▼
+FPGA
+    │
+    │ 结果
+    ▼
+httpx
+    │
+    ▼
+LeaseManager
+    │
+    ▼
+SQLAlchemy
+    │
+    │ 保存 Request result
+    ▼
+SQLite
+    │
+    ▼
+FastAPI
+    │
+    │ HTTP Response
+    ▼
+TonyPi Robot
+```
+
+1. TonyPi 不直接连接 KV260 Worker。
+2. TonyPi 只调用 Central FastAPI 的 `/predict`。
+3. LeaseManager 根据 StudentLease、Artifact 和 Worker 状态选择或等待 Worker。
+4. SQLAlchemy 查询、更新 SQLite 中的 Student、Artifact、Lease 和 Request 持久化状态。
+5. asyncio 的 Student lock 保护同一 Student 的并发操作，后台任务负责 allocator、reaper 和 monitor。
+6. httpx 是 Central 调用 KV260 Worker 的 HTTP 客户端。
+7. Worker 使用 PYNQ Overlay 和 DMA 操作 FPGA。
+8. FPGA 结果经 Worker → httpx → LeaseManager 返回 Central。
+9. Central 通过 SQLAlchemy 把 Request result、状态和完成时间写回 SQLite。
+10. FastAPI 最终把 HTTP Response 返回 TonyPi；若先返回 `202`，Robot 后续按 `request_id` 查询。
+
+简化图中的直接 `/predict` 仅适用于 StudentLease 和 Worker 的 `current_artifact_id` 都等于 Request 的 `artifact_id`，且 Worker 状态正确的情况。否则必须先部署：
+
+```text
+LeaseManager
+     ↓
+httpx
+     ↓
+POST /internal/deploy
+     ↓
+KV260 Worker
+     ↓
+PYNQ Overlay
+     ↓
+FPGA Ready
+     ↓
+POST /predict
+```
+
+```text
+StudentLease.current_artifact_id == request.artifact_id
+Worker.current_artifact_id       == request.artifact_id
+Worker state is correct
+     ↓
+skip deploy
+     ↓
+direct predict
+```
+
+### 19.3 当前能力、测试与限制
 
 已实现 Student scrypt password、Artifact version、persistent Request Queue、StudentLease、Lazy Allocation、FIFO、deploy once/predict many、idle/LRU/manual release、Worker offline/recovery、Central restart recovery、Audit/Event、ARCHIVED、Artifact Cleanup 和真实花卉 DMA adapter。
 
@@ -637,7 +860,7 @@ Server pytest 覆盖认证、Artifact、Request、调度、并发、恢复、Aud
 
 当前没有 Redis、PostgreSQL、RabbitMQ、Celery、Kubernetes scheduler、跨进程锁、RUNNING 自动 replay、Student 直连 Worker或 Student release API；也没有 TLS、HA、完整 RBAC/SSO。其他算法必须实现专用 payload/DMA/MMIO adapter，不能自动套用花卉 ABI。
 
-## 21. Runtime Factory
+## 20. Runtime Factory
 
 Runtime Factory 只负责建立板卡基础能力：
 
@@ -655,7 +878,7 @@ Runtime Factory 只负责建立板卡基础能力：
 
 它验证 XRT、ZOCL、pyxrt、PYNQ、Device Tree、`EmbeddedDevice` 和 `allocate()`，随后安装并启用 `kv260-worker.service`。Runtime Factory 同时安装 Worker HTTP contract、Overlay 部署能力、Pillow 图像解码依赖和花卉 AXI DMA adapter；Worker 与 PYNQ 共用 `/opt/kv260-pynq` venv，固定 `fastapi==0.115.13` / `pydantic==1.10.22`。安装过程会窄化修正 pynqmetadata 0.1.9 对旧 `pydantic==1.9.1` 的包元数据约束，并以 `pip check` 和实际 import 验证 Python 3.12 运行组合。Central 仍负责 Artifact、Lease 与 Request。
 
-### 21.1 部署 PC 端仓库布局
+### 20.1 部署 PC 端仓库布局
 
 ```text
 kv260/
@@ -692,7 +915,7 @@ kv260/
     └── kv260N.log
 ```
 
-### 21.2 KV260 端文件系统布局
+### 20.2 KV260 端文件系统布局
 
 ```text
 KV260 filesystem
@@ -761,7 +984,7 @@ KV260 filesystem
 | `/opt/fpga` | 默认应用 bit/hwh | 应用文件 |
 | `/lib/modules/<kernel>/updates/dkms/zocl.ko*` | 当前 kernel 的 ZOCL module | DKMS/package 管理 |
 
-### 21.3 Central Server V1 目录与模块关系
+### 20.3 Central Server V1 目录与模块关系
 
 ```text
 server/
