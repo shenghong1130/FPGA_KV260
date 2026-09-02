@@ -486,6 +486,31 @@ python -m testbed.smoke_test
 
 它验证 Artifact、Lazy Allocation、固定 Worker、deploy once、202 Queue、LRU reclaim、自动执行和 Session API 移除。
 
+### 6.7 Multi-Student Persistence Test
+
+下面的真实 HTTP 集成测试让 5 个 Student 并发上传同一份 `design.bit` 和 `design.hwh`，再同时使用同一张 `flower.jpg` 提交 predict。脚本接受即时完成的 HTTP 200 和进入队列的 HTTP 202，并等待所有 Request 完成：
+
+```bash
+python testbed/multi_student_persistence_test.py \
+  --server http://192.168.31.254:8000 \
+  --bit ./design.bit \
+  --hwh ./design.hwh \
+  --image ./flower.jpg
+```
+
+增加 `--restart-check` 后，脚本会在请求完成时暂停。重启 Central 并按 Enter 后，脚本不重新上传或提交，而是使用原 `request_id` 检查 PredictRequest、Artifact metadata 和 AuditEvent 的 SQLite 持久性：
+
+```bash
+python testbed/multi_student_persistence_test.py \
+  --server http://192.168.31.254:8000 \
+  --bit ./design.bit \
+  --hwh ./design.hwh \
+  --image ./flower.jpg \
+  --restart-check
+```
+
+5 个默认账号是 `persist01` 至 `persist05`；所有账号使用完全相同的 bit、hwh 和 jpg bytes，但 Central 仍应按 `student_id` 创建互相独立的 Artifact。
+
 ## 7. 自动化测试
 
 ```bash
