@@ -159,3 +159,12 @@ class ArtifactCleanupResult(BaseModel):
     failed_count: int
     freed_bytes: int
     failed: list[ArtifactCleanupFailure]
+
+
+class ArtifactDeleteResult(BaseModel):
+    artifact_id: str
+    student_id: str
+    version: str
+    archived: bool
+    files_deleted: bool
+    freed_bytes: int

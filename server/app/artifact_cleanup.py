@@ -15,12 +15,34 @@ from .db_models import (
     ArtifactStatus,
     PredictRequestRecord,
     RequestStatus,
+    SessionRecord,
+    SessionStatus,
     StudentLease,
     Worker,
 )
 from .lease_manager import LeaseManager
 
 SAFE_ARTIFACT_ID = re.compile(r"^art_[0-9a-f]{32}$")
+ACTIVE_SESSION_STATUSES = {
+    SessionStatus.QUEUED.value,
+    SessionStatus.RESERVED.value,
+    SessionStatus.DEPLOYING.value,
+    SessionStatus.READY.value,
+    SessionStatus.BUSY.value,
+    SessionStatus.RELEASING.value,
+}
+
+
+class ArtifactDeleteNotFoundError(LookupError):
+    pass
+
+
+class ArtifactDeleteConflictError(RuntimeError):
+    pass
+
+
+class ArtifactDeleteFileError(RuntimeError):
+    pass
 
 
 @dataclass(slots=True)
@@ -46,25 +68,8 @@ class ArtifactCleanupService:
         self.cleanup_lock = asyncio.Lock()
 
     @staticmethod
-    def _protected_ids(database: Session) -> set[str]:
+    def _in_use_ids(database: Session) -> set[str]:
         protected: set[str] = set()
-
-        # The first READY row for each student is its latest deployable Artifact.
-        seen_students: set[str] = set()
-        ready = database.scalars(
-            select(Artifact)
-            .where(Artifact.status == ArtifactStatus.READY.value)
-            .order_by(
-                Artifact.student_id,
-                Artifact.created_at.desc(),
-                Artifact.id.desc(),
-            )
-        ).all()
-        for artifact in ready:
-            if artifact.student_id not in seen_students:
-                protected.add(artifact.id)
-                seen_students.add(artifact.student_id)
-
         protected.update(
             value
             for value in database.scalars(
@@ -92,7 +97,40 @@ class ArtifactCleanupService:
                 )
             ).all()
         )
+        protected.update(
+            database.scalars(
+                select(SessionRecord.artifact_id).where(
+                    SessionRecord.status.in_(ACTIVE_SESSION_STATUSES)
+                )
+            ).all()
+        )
         return protected
+
+    @classmethod
+    def _cleanup_protected_ids(cls, database: Session) -> set[str]:
+        protected = cls._in_use_ids(database)
+
+        # Automatic cleanup must retain the latest READY row for each student.
+        seen_students: set[str] = set()
+        ready = database.scalars(
+            select(Artifact)
+            .where(Artifact.status == ArtifactStatus.READY.value)
+            .order_by(
+                Artifact.student_id,
+                Artifact.created_at.desc(),
+                Artifact.id.desc(),
+            )
+        ).all()
+        for artifact in ready:
+            if artifact.student_id not in seen_students:
+                protected.add(artifact.id)
+                seen_students.add(artifact.student_id)
+        return protected
+
+    @classmethod
+    def _protected_ids(cls, database: Session) -> set[str]:
+        """Backward-compatible name for automatic cleanup protection."""
+        return cls._cleanup_protected_ids(database)
 
     @staticmethod
     def _candidate(artifact: Artifact) -> CleanupCandidate:
@@ -145,6 +183,73 @@ class ArtifactCleanupService:
         # set. Keep deletion inside the serialized cleanup operation.
         shutil.rmtree(target)
         return True
+
+    async def delete_artifact(self, artifact_id: str) -> dict:
+        async with self.cleanup_lock:
+            with self.sessions() as database:
+                artifact = database.get(Artifact, artifact_id)
+                if artifact is None:
+                    raise ArtifactDeleteNotFoundError(artifact_id)
+                student_id = artifact.student_id
+
+            async with self.lease_manager.student_locks[student_id]:
+                with self.sessions() as database:
+                    artifact = database.get(Artifact, artifact_id)
+                    if artifact is None:
+                        raise ArtifactDeleteNotFoundError(artifact_id)
+                    if artifact.status != ArtifactStatus.READY.value:
+                        raise ArtifactDeleteConflictError("artifact is not READY")
+                    if artifact.id in self._in_use_ids(database):
+                        raise ArtifactDeleteConflictError(
+                            "Artifact is currently in use"
+                        )
+                    version = artifact.version
+                    size = int(artifact.bit_size or 0) + int(artifact.hwh_size or 0)
+
+                try:
+                    files_existed = await self._remove_directory(artifact_id)
+                except Exception as exc:
+                    error = str(exc) or type(exc).__name__
+                    self.audit.record(
+                        "ARTIFACT_ADMIN_DELETE_FAILED",
+                        level="ERROR",
+                        actor_type="admin",
+                        student_id=student_id,
+                        artifact_id=artifact_id,
+                        message="Administrator failed to delete Artifact",
+                        details={"version": version, "error": error},
+                    )
+                    raise ArtifactDeleteFileError(error) from exc
+
+                with self.sessions() as database:
+                    artifact = database.get(Artifact, artifact_id)
+                    if artifact is None:
+                        raise ArtifactDeleteNotFoundError(artifact_id)
+                    artifact.status = ArtifactStatus.ARCHIVED.value
+                    database.commit()
+
+                freed_bytes = size if files_existed else 0
+                self.audit.record(
+                    "ARTIFACT_ADMIN_DELETED",
+                    level="WARNING",
+                    actor_type="admin",
+                    student_id=student_id,
+                    artifact_id=artifact_id,
+                    message=f"Administrator deleted Artifact {version}",
+                    details={
+                        "version": version,
+                        "freed_bytes": freed_bytes,
+                        "files_missing": not files_existed,
+                    },
+                )
+                return {
+                    "artifact_id": artifact_id,
+                    "student_id": student_id,
+                    "version": version,
+                    "archived": True,
+                    "files_deleted": files_existed,
+                    "freed_bytes": freed_bytes,
+                }
 
     async def execute(self) -> dict:
         archived_count = 0

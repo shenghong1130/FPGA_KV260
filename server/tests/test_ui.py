@@ -32,6 +32,7 @@ async def test_dashboard_index(test_context) -> None:
     assert '<input id="event-type-filter"' not in response.text
     assert 'id="cleanup-preview-button"' in response.text
     assert "旧版本清理" in response.text
+    assert "操作 / Actions" in response.text
     assert response.text.index('id="worker-request-query-form"') < response.text.index(
         'id="student-request-query-form"'
     ) < response.text.index("Recent Predict Requests")
@@ -75,6 +76,15 @@ async def test_dashboard_static_assets(test_context) -> None:
     assert '$("#request-query-form")' not in javascript.text
     assert 'apiFetch("/admin/artifacts/cleanup-preview"' in javascript.text
     assert 'apiFetch("/admin/artifacts/cleanup"' in javascript.text
+    assert "DELETE /admin/artifacts/" in javascript.text
+    assert "`/admin/artifacts/${encodeURIComponent(item.artifact_id)}`" in javascript.text
+    assert 'method: "DELETE"' in javascript.text
+    assert 'headers: { "X-Admin-Token": token }' in javascript.text
+    assert "deleteArtifact" in javascript.text
+    assert "X-Student-Password" not in javascript.text[
+        javascript.text.index("async function deleteArtifact"):
+        javascript.text.index("function renderRecentArtifacts")
+    ]
 
 
 async def test_ui_path_redirects_to_trailing_slash(test_context) -> None:

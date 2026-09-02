@@ -377,7 +377,7 @@ function filteredArtifacts() {
 function renderArtifacts() {
   const body = $("#artifact-table"); clear(body);
   const all = filteredArtifacts(), shown = all.slice(0, state.artifactLimit), latest = latestVersions();
-  if (!shown.length) { const row = node("tr"); const cell = node("td", { className: "empty", text: "暂无 Artifact / No artifacts" }); cell.colSpan = 8; row.append(cell); body.append(row); }
+  if (!shown.length) { const row = node("tr"); const cell = node("td", { className: "empty", text: "暂无 Artifact / No artifacts" }); cell.colSpan = 9; row.append(cell); body.append(row); }
   for (const item of shown) {
     const row = node("tr");
     const version = node("td", { text: item.version || "—" });
@@ -385,10 +385,35 @@ function renderArtifacts() {
     const idCell = node("td", { className: "mono", text: shortHash(item.artifact_id), title: item.artifact_id }); idCell.append(copyButton(item.artifact_id, "复制"));
     const sha = node("td", { className: "mono" }); sha.append(node("span", { text: `BIT ${shortHash(item.bit_sha256)} · HWH ${shortHash(item.hwh_sha256)}` }), copyButton(item.bit_sha256, "BIT"), copyButton(item.hwh_sha256, "HWH"));
     const student = node("td"); student.append(studentLink(item.student_id));
-    [student, version, idCell, node("td", { className: `status-${stateKey(item.status)}`, text: stateLabel(item.status) }), node("td", { text: formatBytes(item.bit_size) }), node("td", { text: formatBytes(item.hwh_size) }), node("td", { text: formatTime(item.created_at), title: item.created_at }), sha].forEach((cell) => row.append(cell));
+    const actions = node("td", { className: "artifact-actions" });
+    if (stateKey(item.status) === "ready") {
+      const deleteButton = node("button", { className: "button danger compact", text: "删除 / Delete", type: "button" });
+      deleteButton.addEventListener("click", () => deleteArtifact(item, deleteButton));
+      actions.append(deleteButton);
+    }
+    [student, version, idCell, node("td", { className: `status-${stateKey(item.status)}`, text: stateLabel(item.status) }), node("td", { text: formatBytes(item.bit_size) }), node("td", { text: formatBytes(item.hwh_size) }), node("td", { text: formatTime(item.created_at), title: item.created_at }), sha, actions].forEach((cell) => row.append(cell));
     body.append(row);
   }
   $("#artifact-show-more").classList.toggle("hidden", shown.length >= all.length);
+}
+async function deleteArtifact(item, button) {
+  // DELETE /admin/artifacts/{artifact_id}
+  const token = adminToken();
+  if (!token) { toast("请先在 Tools 中设置 Admin Action Token", "warning"); return; }
+  const confirmation = `确认删除以下 Artifact 的实体文件？\n\nStudent: ${item.student_id}\nVersion: ${item.version}\nArtifact ID: ${item.artifact_id}\n\n此操作将删除该 Artifact 的 bit/hwh 实体文件。\nMetadata、历史 Request 和 Audit Event 将保留。\n如果该 Artifact 当前正在 Worker/Lease/Request 中使用，服务器将拒绝删除。`;
+  if (!window.confirm(confirmation)) return;
+  const original = button.textContent; button.disabled = true; button.textContent = "Deleting...";
+  try {
+    await apiFetch(`/admin/artifacts/${encodeURIComponent(item.artifact_id)}`, {
+      method: "DELETE", headers: { "X-Admin-Token": token }, timeout: 120000,
+    });
+    toast(`Artifact ${item.version} 已删除 / Artifact deleted`, "success");
+    await Promise.allSettled([loadArtifacts(), loadStudents(), loadEvents(), loadHealth()]);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false; button.textContent = original;
+  }
 }
 function renderRecentArtifacts() {
   const body = $("#recent-artifacts"); clear(body);

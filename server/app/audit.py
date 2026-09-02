@@ -33,6 +33,8 @@ AUDIT_EVENT_TYPES: tuple[tuple[str, str], ...] = (
     ("ARTIFACT_ARCHIVED", "Artifact 已归档"),
     ("ARTIFACT_CLEANUP_FAILED", "Artifact 清理失败"),
     ("ADMIN_ARTIFACT_CLEANUP", "管理员 Artifact 清理"),
+    ("ARTIFACT_ADMIN_DELETED", "管理员删除 Artifact"),
+    ("ARTIFACT_ADMIN_DELETE_FAILED", "管理员删除 Artifact 失败"),
 )
 
 
