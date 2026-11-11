@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from datetime import timedelta, timezone
 import logging
 import uuid
 from collections import defaultdict
@@ -14,7 +15,7 @@ from .audit import AuditLogger
 from .hardware_validation import HardwareValidationError, validate_paths
 from .config import Settings
 from .db_models import (
-    Artifact, ArtifactStatus, LeaseStatus, PredictRequestRecord, RequestStatus,
+    Artifact, ArtifactStatus, AuditEvent, LeaseStatus, PredictRequestRecord, RequestStatus,
     StudentCredential, StudentLease, Worker, WorkerState, utcnow,
 )
 from .scheduler import Scheduler
@@ -98,6 +99,8 @@ class LeaseManager:
             )
 
     def start(self) -> None:
+        if self.settings.maintenance_mode:
+            return
         self.allocator_task = asyncio.create_task(self._allocator_loop(), name="lease-allocator")
         self.reaper_task = asyncio.create_task(self._reaper_loop(), name="lease-reaper")
         self.allocator_event.set()
@@ -116,6 +119,8 @@ class LeaseManager:
 
     async def submit_predict(self, student_id: str,
                              payload: dict[str, Any]) -> PredictRequestRecord:
+        if self.settings.maintenance_mode:
+            raise RuntimeError("KV260 maintenance: scheduling paused")
         async with self.student_locks[student_id]:
             with self.sessions() as database:
                 artifact = self._latest_artifact(database, student_id)
@@ -226,6 +231,7 @@ class LeaseManager:
         running = counts.get(RequestStatus.RUNNING.value, 0)
         completed = counts.get(RequestStatus.COMPLETED.value, 0)
         failed = counts.get(RequestStatus.FAILED.value, 0)
+        cancelled = counts.get(RequestStatus.CANCELLED.value, 0)
         return {
             "student_id": student_id,
             "latest_artifact_id": artifact.id if artifact else None,
@@ -238,7 +244,8 @@ class LeaseManager:
             "running_requests": running,
             "completed_requests": completed,
             "failed_requests": failed,
-            "total_requests": queued + running + completed + failed,
+            "cancelled_requests": cancelled,
+            "total_requests": queued + running + completed + failed + cancelled,
             "last_activity_at": last_activity_at,
         }
 
@@ -260,7 +267,71 @@ class LeaseManager:
         lease.lease_id = None
         lease.current_artifact_id = None
 
+    async def _reject_invalid_pending(self, student_id: str) -> None:
+        """Reject old incompatible READY artifacts before any board reservation."""
+        while True:
+            with self.sessions() as database:
+                record = database.scalar(select(PredictRequestRecord).where(
+                    PredictRequestRecord.student_id == student_id,
+                    PredictRequestRecord.status == RequestStatus.QUEUED.value,
+                ).order_by(PredictRequestRecord.created_at, PredictRequestRecord.id).limit(1))
+                if record is None:
+                    return
+                artifact = database.get(Artifact, record.artifact_id)
+                artifact_id = record.artifact_id
+            try:
+                if artifact is None or artifact.status != ArtifactStatus.READY.value:
+                    raise HardwareValidationError("Artifact is not READY; upload a compatible design")
+                await asyncio.to_thread(validate_paths, Path(artifact.bit_path), Path(artifact.hwh_path),
+                                        artifact.bit_sha256, artifact.hwh_sha256)
+                return
+            except (HardwareValidationError, OSError) as exc:
+                error = str(exc)
+            with self.sessions() as database:
+                artifact = database.get(Artifact, artifact_id)
+                if artifact and artifact.status == ArtifactStatus.READY.value:
+                    artifact.status = ArtifactStatus.FAILED.value
+                rejected = list(database.scalars(select(PredictRequestRecord).where(
+                    PredictRequestRecord.student_id == student_id,
+                    PredictRequestRecord.artifact_id == artifact_id,
+                    PredictRequestRecord.status == RequestStatus.QUEUED.value)).all())
+                ids = [pending.id for pending in rejected]
+                for pending in rejected:
+                    pending.status = RequestStatus.FAILED.value
+                    pending.error = error
+                    pending.completed_at = utcnow()
+                database.commit()
+            self.audit.record("ARTIFACT_REJECTED", level="ERROR", student_id=student_id,
+                              artifact_id=artifact_id, message=error,
+                              details={"stage": "before_worker_reservation"})
+            for request_id in ids:
+                self.audit.record("REQUEST_FAILED", level="ERROR", student_id=student_id,
+                                  artifact_id=artifact_id, request_id=request_id,
+                                  message="Artifact rejected before Worker reservation", details={"error": error})
+
+    async def authorize_release_retry(self, student_id: str, expected_lease_id: str, reason: str) -> bool:
+        """Explicit operator action only; never clears ownership or asserts hardware safety."""
+        if not reason.strip():
+            raise ValueError("operator reason required")
+        async with self.student_locks[student_id]:
+            with self.sessions() as database:
+                lease = database.get(StudentLease, student_id)
+                if (lease is None or lease.lease_id != expected_lease_id or
+                        lease.state not in {LeaseStatus.ERROR.value, LeaseStatus.LOST.value}):
+                    return False
+                lease.release_attempts = 0
+                lease.release_retry_at = None
+                lease.release_blocked = 0
+                database.add(AuditEvent(id=f"evt_{uuid.uuid4().hex}", event_type="RELEASE_RETRY_AUTHORIZED",
+                    level="WARNING", actor_type="administrator", student_id=student_id,
+                    message=reason, details={"lease_id": expected_lease_id}))
+                database.commit()
+            return True
+
     async def _process_student_locked(self, student_id: str) -> None:
+        if self.settings.maintenance_mode:
+            return
+        await self._reject_invalid_pending(student_id)
         with self.sessions() as database:
             lease = database.get(StudentLease, student_id)
             if lease is None:
@@ -549,6 +620,22 @@ class LeaseManager:
                     worker.last_error = None if bad_payload else str(exc)
                     if not bad_payload:
                         worker.fpga_ready = 0
+                        if exc.permanent:
+                            # A proven FPGA execution failure must not circulate
+                            # to other boards via already queued requests.
+                            database.get(Artifact, artifact_id).status = ArtifactStatus.FAILED.value
+                            for pending in database.scalars(select(PredictRequestRecord).where(
+                                    PredictRequestRecord.artifact_id == artifact_id,
+                                    PredictRequestRecord.status == RequestStatus.QUEUED.value)).all():
+                                pending.status = RequestStatus.FAILED.value
+                                pending.error = str(exc)
+                                pending.completed_at = utcnow()
+                            database.add(AuditEvent(id=f"evt_{uuid.uuid4().hex}",
+                                event_type="ARTIFACT_QUARANTINED", level="ERROR",
+                                actor_type="system", student_id=student_id, board=worker_board,
+                                artifact_id=artifact_id, request_id=request_id,
+                                message="FPGA execution failed; Artifact quarantined before cross-board retry",
+                                details={"error": str(exc), "lease_id": lease_id}))
                     database.commit()
                     completed_at = record.completed_at
                 duration = (
@@ -711,6 +798,16 @@ class LeaseManager:
                         (not recovery and worker.state != WorkerState.READY.value) or
                         worker.lease_id != lease.lease_id):
                     return False
+                if lease.release_blocked or lease.release_attempts >= 3:
+                    return False
+                now = utcnow()
+                retry_at = lease.release_retry_at
+                if retry_at is not None:
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    if now < retry_at:
+                        return False
+                lease.release_attempts += 1
                 lease_id = lease.lease_id
                 worker_board = worker.board
                 worker_base_url = worker.base_url
@@ -728,13 +825,25 @@ class LeaseManager:
                     lease = database.get(StudentLease, student_id)
                     worker = database.get(Worker, worker_board)
                     if (lease is None or worker is None or lease.lease_id != lease_id or
-                            worker.lease_id != lease_id):
+                            worker.lease_id != lease_id or worker.base_url != worker_base_url or
+                            lease.state != LeaseStatus.RELEASING.value):
                         return False
                     lease.state = LeaseStatus.ERROR.value
                     lease.error = str(exc)
                     worker.state = WorkerState.ERROR.value
                     worker.last_error = str(exc)
+                    lease.release_retry_at = utcnow() + timedelta(seconds=2 ** (lease.release_attempts - 1))
+                    lease.release_blocked = int(exc.status_code in {409, 422} or lease.release_attempts >= 3)
+                    blocked = bool(lease.release_blocked)
+                    attempts = lease.release_attempts
+                    if blocked:
+                        lease.error = f"{exc}; automatic release stopped after {attempts} attempt(s); operator recovery required"
+                        worker.last_error = lease.error
                     database.commit()
+            if blocked:
+                self.audit.record("RELEASE_RETRY_EXHAUSTED", level="ERROR", student_id=student_id,
+                                  board=worker_board, message="Worker remains isolated; automatic release stopped",
+                                  details={"lease_id": lease_id, "attempts": attempts, "error": str(exc)})
             if raise_on_worker_error:
                 raise WorkerReleaseError(str(exc)) from exc
             return False
@@ -758,6 +867,9 @@ class LeaseManager:
                 lease.current_artifact_id = None
                 lease.released_at = utcnow()
                 lease.error = None
+                lease.release_attempts = 0
+                lease.release_retry_at = None
+                lease.release_blocked = 0
                 if recovery and pending:
                     self._queue(lease)
                 database.commit()

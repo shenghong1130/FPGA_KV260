@@ -22,6 +22,9 @@ async def health(request: Request) -> dict[str, object]:
     request_counts = Counter(item.status.lower() for item in request_rows)
     return {
         "ok": True,
+        "maintenance_mode": request.app.state.services.settings.maintenance_mode,
+        "lease_idle_timeout_seconds": request.app.state.services.settings.lease_idle_timeout_seconds,
+        "lease_reaper_interval_seconds": request.app.state.services.settings.lease_reaper_interval_seconds,
         "workers": {"total": len(workers), **dict(sorted(worker_counts.items()))},
         "leases": dict(sorted(lease_counts.items())),
         "requests": dict(sorted(request_counts.items())),

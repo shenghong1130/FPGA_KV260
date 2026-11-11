@@ -1,0 +1,391 @@
+{
+  "time": "2026-11-11T19:42:34.609956+08:00",
+  "health": {
+    "ok": true,
+    "maintenance_mode": false,
+    "lease_idle_timeout_seconds": 30.0,
+    "lease_reaper_interval_seconds": 1.0,
+    "workers": {
+      "total": 20,
+      "error": 5,
+      "idle": 2,
+      "offline": 13
+    },
+    "leases": {
+      "lost": 2,
+      "unassigned": 18
+    },
+    "requests": {
+      "cancelled": 1,
+      "completed": 2059,
+      "failed": 27
+    }
+  },
+  "workers": [
+    {
+      "board": "kv2601",
+      "state": "idle",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-11-11T11:42:34.588015Z",
+      "last_error": null
+    },
+    {
+      "board": "kv26010",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T03:23:30.234577Z",
+      "last_error": "GET http://192.168.31.91:8080/health failed: "
+    },
+    {
+      "board": "kv26011",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T05:19:12.276849Z",
+      "last_error": "GET http://192.168.31.92:8080/health failed: "
+    },
+    {
+      "board": "kv26012",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T06:02:19.171186Z",
+      "last_error": "GET http://192.168.31.93:8080/health failed: "
+    },
+    {
+      "board": "kv26013",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T05:51:16.516972Z",
+      "last_error": "GET http://192.168.31.94:8080/health failed: "
+    },
+    {
+      "board": "kv26014",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-09T03:43:18.553014Z",
+      "last_error": "GET http://192.168.31.95:8080/health failed: "
+    },
+    {
+      "board": "kv26015",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T06:50:07.644982Z",
+      "last_error": "GET http://192.168.31.96:8080/health failed: "
+    },
+    {
+      "board": "kv26016",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T08:38:06.473656Z",
+      "last_error": "GET http://192.168.31.97:8080/health failed: "
+    },
+    {
+      "board": "kv26017",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T08:52:41.334192Z",
+      "last_error": "GET http://192.168.31.98:8080/health failed: "
+    },
+    {
+      "board": "kv26018",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T10:00:36.540529Z",
+      "last_error": "GET http://192.168.31.99:8080/health failed: "
+    },
+    {
+      "board": "kv26019",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T09:53:12.131055Z",
+      "last_error": "GET http://192.168.31.100:8080/health failed: "
+    },
+    {
+      "board": "kv2602",
+      "state": "error",
+      "lease_id": "lease_d455fd81936641b382c215b568d2bf3b",
+      "student_id": null,
+      "artifact_id": "art_6400915f86554d81987d49c34217a1c1",
+      "fpga_ready": false,
+      "last_seen": "2026-11-11T11:42:34.592365Z",
+      "last_error": "worker reports ownership unknown to Central Server"
+    },
+    {
+      "board": "kv26020",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-09T04:15:31.258163Z",
+      "last_error": "GET http://192.168.31.101:8080/health failed: "
+    },
+    {
+      "board": "kv2603",
+      "state": "error",
+      "lease_id": "lease_39a6a580529544c095f184f7fa1508cb",
+      "student_id": null,
+      "artifact_id": "art_574a91450dd247b0894f22934778fc24",
+      "fpga_ready": true,
+      "last_seen": "2026-11-11T11:42:34.866097Z",
+      "last_error": "worker reports ownership unknown to Central Server"
+    },
+    {
+      "board": "kv2604",
+      "state": "idle",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-11-11T11:42:34.569764Z",
+      "last_error": null
+    },
+    {
+      "board": "kv2605",
+      "state": "error",
+      "lease_id": "lease_c85a11cb4af54a8fb2a848eca6089c99",
+      "student_id": null,
+      "artifact_id": "art_574a91450dd247b0894f22934778fc24",
+      "fpga_ready": true,
+      "last_seen": "2026-11-11T11:42:34.860314Z",
+      "last_error": "worker reports ownership unknown to Central Server"
+    },
+    {
+      "board": "kv2606",
+      "state": "error",
+      "lease_id": "lease_ad38e460fe7f435697a732daec7749fa",
+      "student_id": null,
+      "artifact_id": "art_574a91450dd247b0894f22934778fc24",
+      "fpga_ready": false,
+      "last_seen": "2026-11-11T11:42:34.576406Z",
+      "last_error": "worker reports ownership unknown to Central Server"
+    },
+    {
+      "board": "kv2607",
+      "state": "error",
+      "lease_id": "lease_e338842eba644c8cb0e47b73e064eac4",
+      "student_id": null,
+      "artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+      "fpga_ready": false,
+      "last_seen": "2026-11-11T11:42:34.581971Z",
+      "last_error": "worker reports ownership unknown to Central Server"
+    },
+    {
+      "board": "kv2608",
+      "state": "offline",
+      "lease_id": null,
+      "student_id": null,
+      "artifact_id": null,
+      "fpga_ready": false,
+      "last_seen": "2026-09-08T03:42:53.259052Z",
+      "last_error": "GET http://192.168.31.89:8080/health failed: "
+    },
+    {
+      "board": "kv2609",
+      "state": "offline",
+      "lease_id": "lease_2e58eb0e3580460e8b2d21e1ce713043",
+      "student_id": null,
+      "artifact_id": "art_55f5803f28fa4c00aafe60880e3db29c",
+      "fpga_ready": false,
+      "last_seen": "2026-09-07T09:58:43.367080Z",
+      "last_error": "GET http://192.168.31.90:8080/health failed: "
+    }
+  ],
+  "remote": {
+    "kv2601": {
+      "board": "kv2601",
+      "fpga_ready": false,
+      "lease_id": null,
+      "artifact_id": null
+    },
+    "kv2602": {
+      "board": "kv2602",
+      "fpga_ready": false,
+      "lease_id": null,
+      "artifact_id": null
+    },
+    "kv2603": {
+      "board": "kv2603",
+      "fpga_ready": true,
+      "lease_id": "lease_39a6a580529544c095f184f7fa1508cb",
+      "artifact_id": "art_574a91450dd247b0894f22934778fc24"
+    },
+    "kv2604": {
+      "board": "kv2604",
+      "fpga_ready": false,
+      "lease_id": null,
+      "artifact_id": null
+    },
+    "kv2605": {
+      "board": "kv2605",
+      "fpga_ready": true,
+      "lease_id": "lease_c85a11cb4af54a8fb2a848eca6089c99",
+      "artifact_id": "art_574a91450dd247b0894f22934778fc24"
+    },
+    "kv2606": {
+      "board": "kv2606",
+      "fpga_ready": false,
+      "lease_id": null,
+      "artifact_id": null
+    },
+    "kv2607": {
+      "board": "kv2607",
+      "fpga_ready": false,
+      "lease_id": null,
+      "artifact_id": null
+    },
+    "kv2608": {
+      "error": "ConnectTimeout"
+    },
+    "kv2609": {
+      "error": "ConnectTimeout"
+    },
+    "kv26010": {
+      "error": "ConnectTimeout"
+    },
+    "kv26011": {
+      "error": "ConnectTimeout"
+    },
+    "kv26012": {
+      "error": "ConnectTimeout"
+    },
+    "kv26013": {
+      "error": "ConnectTimeout"
+    },
+    "kv26014": {
+      "error": "ConnectTimeout"
+    },
+    "kv26015": {
+      "error": "ConnectTimeout"
+    },
+    "kv26016": {
+      "error": "ConnectTimeout"
+    },
+    "kv26017": {
+      "error": "ConnectTimeout"
+    },
+    "kv26018": {
+      "error": "ConnectTimeout"
+    },
+    "kv26019": {
+      "error": "ConnectTimeout"
+    },
+    "kv26020": {
+      "error": "ConnectTimeout"
+    }
+  },
+  "dashboard": {
+    "http_status": 200,
+    "javascript_matches_deployed_source": true
+  },
+  "integrity": "ok",
+  "tables": {
+    "artifacts": 52,
+    "workers": 20,
+    "student_leases": 20,
+    "predict_requests": 2087,
+    "audit_events": 10775,
+    "student_credentials": 22
+  },
+  "central_orphans": [
+    {
+      "board": "kv2602",
+      "session_id": "lease_d455fd81936641b382c215b568d2bf3b",
+      "current_artifact_id": "art_6400915f86554d81987d49c34217a1c1",
+      "state": "ERROR"
+    },
+    {
+      "board": "kv2603",
+      "session_id": "lease_39a6a580529544c095f184f7fa1508cb",
+      "current_artifact_id": "art_574a91450dd247b0894f22934778fc24",
+      "state": "ERROR"
+    },
+    {
+      "board": "kv2605",
+      "session_id": "lease_c85a11cb4af54a8fb2a848eca6089c99",
+      "current_artifact_id": "art_574a91450dd247b0894f22934778fc24",
+      "state": "ERROR"
+    },
+    {
+      "board": "kv2606",
+      "session_id": "lease_ad38e460fe7f435697a732daec7749fa",
+      "current_artifact_id": "art_574a91450dd247b0894f22934778fc24",
+      "state": "ERROR"
+    },
+    {
+      "board": "kv2607",
+      "session_id": "lease_e338842eba644c8cb0e47b73e064eac4",
+      "current_artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+      "state": "ERROR"
+    },
+    {
+      "board": "kv2609",
+      "session_id": "lease_2e58eb0e3580460e8b2d21e1ce713043",
+      "current_artifact_id": "art_55f5803f28fa4c00aafe60880e3db29c",
+      "state": "OFFLINE"
+    }
+  ],
+  "student_disconnects": [
+    {
+      "student_id": "216邵卿宇",
+      "lease_id": "lease_3ea348f4f28c4a848b95be3bf89838c0",
+      "worker_id": "kv2607",
+      "state": "LOST",
+      "release_blocked": 1
+    },
+    {
+      "student_id": "2024011836",
+      "lease_id": "lease_56d8f28d145c4fa0a8950822d5107785",
+      "worker_id": "kv2602",
+      "state": "LOST",
+      "release_blocked": 1
+    }
+  ],
+  "active_requests": [],
+  "active_leases": [],
+  "last_deployment_failure": {
+    "n": 1619,
+    "last": "2026-11-11 09:02:29.431976"
+  },
+  "central_pid": "1412194",
+  "central_process": "Wed Nov 11 19:31:10 2026 /home/robot/kv260/server/.venv/bin/python /home/robot/kv260/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000",
+  "central_cwd": "/home/robot/kv260/server",
+  "effective_environment": {
+    "KV260_MAINTENANCE_MODE": "0",
+    "LEASE_IDLE_TIMEOUT_SECONDS": "30",
+    "LEASE_REAPER_INTERVAL_SECONDS": "1"
+  },
+  "deployed_files_verified": 21
+}

@@ -11,7 +11,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import URL
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import RedirectResponse, Response, JSONResponse
 
 from .api import admin_artifacts, artifacts, events, health, predict, students, workers
 from .artifact_cleanup import ArtifactCleanupService
@@ -125,9 +125,11 @@ def create_app(
         )
         app.state.services = services
         await registry.sync_config()
-        await manager.recover_requests()
+        if not selected_settings.maintenance_mode:
+            await manager.recover_requests()
         await registry.recover()
-        manager.start()
+        if not selected_settings.maintenance_mode:
+            manager.start()
         registry.start()
         try:
             yield
@@ -142,6 +144,13 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
+    @application.middleware("http")
+    async def maintenance_gate(request, call_next):
+        if selected_settings.maintenance_mode and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            return JSONResponse(status_code=503, headers={"Retry-After": "30"},
+                                content={"detail": "KV260 maintenance: uploads, predictions and scheduling are paused"})
+        return await call_next(request)
+
     application.include_router(health.router)
     application.include_router(artifacts.router)
     application.include_router(predict.router)

@@ -30,6 +30,7 @@ class Settings:
     max_hwh_size: int
     max_predict_image_size: int
     admin_action_token: str | None = None
+    maintenance_mode: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -72,4 +73,5 @@ class Settings:
                 os.getenv("MAX_PREDICT_IMAGE_SIZE", str(8 * 1024 * 1024))
             ),
             admin_action_token=os.getenv("ADMIN_ACTION_TOKEN") or None,
+            maintenance_mode=os.getenv("KV260_MAINTENANCE_MODE", "0").lower() in {"1", "true", "yes"},
         )

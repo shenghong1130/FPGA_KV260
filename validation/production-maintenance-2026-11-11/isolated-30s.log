@@ -1,0 +1,20 @@
+PASS: SG rejected before deployment
+PASS: normal simulated deployment/prediction; 3 students own distinct Workers
+PASS: 29 seconds idle does not release lease
+PASS: 30-second automatic idle release; all three parties clear, Workers IDLE {'a': 30.386951, 'b': 30.373225, 'c': 30.299668}
+PASS: isolated SQLite WAL backup/restore and persistent Worker journal backups
+{
+  "hardware": "SIMULATED; real FPGA NOT validated",
+  "test_root": "/tmp/kv260-recovery-http-x5rqsag1",
+  "sg_rejected_before_deployment": true,
+  "normal_deploy_predict_and_concurrent_ownership": true,
+  "dashboard_workers_api_ready": true,
+  "actual_idle_release_seconds": {
+    "a": 30.386951,
+    "b": 30.373225,
+    "c": 30.299668
+  },
+  "dashboard_workers_api_idle_and_no_orphans": true,
+  "central_wal_backup_restore_and_worker_fencing_backup": true,
+  "result": "PASS"
+}

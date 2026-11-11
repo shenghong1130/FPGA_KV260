@@ -71,6 +71,7 @@ class StudentStatusResponse(UtcResponseModel):
     running_requests: int
     completed_requests: int
     failed_requests: int
+    cancelled_requests: int = 0
     total_requests: int
     last_activity_at: datetime | None
 
@@ -85,6 +86,7 @@ class StudentSummaryResponse(UtcResponseModel):
     running_requests: int
     completed_requests: int
     failed_requests: int
+    cancelled_requests: int = 0
     total_requests: int
     last_activity_at: datetime | None
 

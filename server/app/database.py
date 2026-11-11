@@ -29,6 +29,14 @@ class Database:
                 column["name"]
                 for column in inspect(connection).get_columns("predict_requests")
             }
+            lease_columns = {column["name"] for column in inspect(connection).get_columns("student_leases")}
+            for name, definition in (
+                ("release_attempts", "INTEGER NOT NULL DEFAULT 0"),
+                ("release_retry_at", "DATETIME"),
+                ("release_blocked", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in lease_columns:
+                    connection.execute(text(f"ALTER TABLE student_leases ADD COLUMN {name} {definition}"))
             if "deploy_attempts" not in columns:
                 connection.execute(text(
                     "ALTER TABLE predict_requests ADD COLUMN deploy_attempts INTEGER NOT NULL DEFAULT 0"

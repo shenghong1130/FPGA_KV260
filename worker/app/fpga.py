@@ -5,6 +5,8 @@ import base64
 import binascii
 import io
 import os
+import time
+import math
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -48,6 +50,8 @@ class PynqFpgaBackend:
         overlay_factory: Callable[[str], Any] | None = None,
         allocate_factory: Callable[..., Any] | None = None,
         max_image_size: int | None = None,
+        dma_timeout_seconds: float | None = None,
+        dma_stop_timeout_seconds: float | None = None,
     ) -> None:
         self.overlay_factory = overlay_factory
         self.allocate_factory = allocate_factory
@@ -56,6 +60,10 @@ class PynqFpgaBackend:
                 os.getenv("KV260_WORKER_MAX_IMAGE_SIZE", str(8 * 1024 * 1024))
             )
         )
+        self.dma_timeout_seconds = float(dma_timeout_seconds if dma_timeout_seconds is not None else os.getenv("KV260_DMA_TIMEOUT_SECONDS", "10"))
+        self.dma_stop_timeout_seconds = float(dma_stop_timeout_seconds if dma_stop_timeout_seconds is not None else os.getenv("KV260_DMA_STOP_TIMEOUT_SECONDS", "2"))
+        if any(not math.isfinite(v) or v <= 0 for v in (self.dma_timeout_seconds, self.dma_stop_timeout_seconds)):
+            raise ValueError("DMA timeouts must be positive finite seconds")
         self.overlay: Any = None
         self.dma: Any = None
         self.x_buffer: Any = None
@@ -97,19 +105,66 @@ class PynqFpgaBackend:
         if buffer is not None and hasattr(buffer, "freebuffer"):
             buffer.freebuffer()
 
+    def _wait_dma_channel(self, channel: Any, name: str) -> None:
+        # PYNQ 3.1.2 Simple DMA wait() spins forever if TLAST never arrives.
+        # Poll the same registers with a deadline and preserve its buffer/cache
+        # completion semantics. Test backends without MMIO retain their API.
+        if not hasattr(channel, "_mmio") or not hasattr(channel, "_offset"):
+            channel.wait()
+            return
+        deadline = time.monotonic() + self.dma_timeout_seconds
+        while True:
+            status = channel._mmio.read(channel._offset + 4)
+            if status & 0x70:
+                raise RuntimeError(f"{name} DMA error status=0x{status:08x}")
+            if status & 1:
+                raise RuntimeError(f"{name} DMA halted before transfer completion status=0x{status:08x}")
+            if status & 2:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"{name} DMA timeout after {self.dma_timeout_seconds:g}s status=0x{status:08x}")
+            time.sleep(0.001)
+        if not channel._flush_before and channel._active_buffer is not None:
+            channel._active_buffer.invalidate()
+        channel.transferred = channel._mmio.read(channel._offset + 0x28)
+        channel._active_buffer = None
+
     def _clear_runtime(self) -> None:
-        # Never return CMA pages to the allocator while a channel could still
-        # write them. On stop failure retain references and quarantine this
-        # Worker; a later release may retry cleanup under the same Worker lock.
+        # Request both stops first, then prove Halted before freeing ANY CMA.
+        # PYNQ stop() itself busy-waits without a deadline; use the same control
+        # register operation and retain references on failure for quarantine.
         stop_errors = []
+        pending = []
         if self.dma is not None:
             for name in ("sendchannel", "recvchannel"):
                 channel = getattr(self.dma, name, None)
-                if channel is not None and hasattr(channel, "stop"):
-                    try:
+                if channel is None:
+                    continue
+                try:
+                    if hasattr(channel, "_mmio") and hasattr(channel, "_offset"):
+                        control = channel._mmio.read(channel._offset)
+                        channel._mmio.write(channel._offset, control & ~1)
+                        pending.append((name, channel))
+                    elif hasattr(channel, "stop"):
                         channel.stop()
-                    except Exception as exc:
-                        stop_errors.append(str(exc))
+                except Exception as exc:
+                    stop_errors.append(f"{name}: {exc}")
+        deadline = time.monotonic() + self.dma_stop_timeout_seconds
+        while pending:
+            remaining = []
+            for name, channel in pending:
+                try:
+                    if not channel._mmio.read(channel._offset + 4) & 1:
+                        remaining.append((name, channel))
+                except Exception as exc:
+                    stop_errors.append(f"{name}: {exc}")
+            pending = remaining
+            if not pending:
+                break
+            if time.monotonic() >= deadline:
+                stop_errors.extend(f"{name}: DMA halt unconfirmed after {self.dma_stop_timeout_seconds:g}s" for name, _ in pending)
+                break
+            time.sleep(0.001)
         if stop_errors:
             raise RuntimeError("cannot safely stop DMA: " + "; ".join(stop_errors))
         self.dma = None
@@ -239,8 +294,8 @@ class PynqFpgaBackend:
             # Verified order: arm receive before starting transmit.
             self.dma.recvchannel.transfer(self.y_buffer)
             self.dma.sendchannel.transfer(self.x_buffer)
-            self.dma.sendchannel.wait()
-            self.dma.recvchannel.wait()
+            self._wait_dma_channel(self.dma.sendchannel, "send")
+            self._wait_dma_channel(self.dma.recvchannel, "receive")
             if hasattr(self.y_buffer, "invalidate"):
                 self.y_buffer.invalidate()
             class_index = int(np.argmax(self.y_buffer))

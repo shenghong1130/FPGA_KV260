@@ -1,0 +1,8 @@
+{
+  "checked_at": "2026-11-11T19:43:41.909060+08:00",
+  "initial_manifest_hashes": "6 durable files PASS; initial 0-byte snapshot WAL and disposable SHM were removed by SQLite after closing; snapshot DB SHA256 unchanged",
+  "worker_archives_sha256_and_full_read": "7/7 PASS",
+  "database_integrity": "3/3 PASS",
+  "production_artifact_files_unchanged": "100/100 existing files PASS; 4 paths already missing/ARCHIVED before maintenance remain unchanged",
+  "worker_backup_limitation_resolution": "All seven reachable Worker file backups now verified; original manifest limitation was the initial pre-SSH snapshot. Offline thirteen have no remote file backup."
+}

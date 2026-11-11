@@ -1,0 +1,19 @@
+{
+  "artifacts": [
+    "art_574a91450dd247b0894f22934778fc24",
+    "art_6400915f86554d81987d49c34217a1c1",
+    "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4"
+  ],
+  "student_leases": [
+    {
+      "student_id": "2024011836",
+      "board": "kv2602",
+      "lease_id": "lease_56d8f28d145c4fa0a8950822d5107785"
+    },
+    {
+      "student_id": "216邵卿宇",
+      "board": "kv2607",
+      "lease_id": "lease_3ea348f4f28c4a848b95be3bf89838c0"
+    }
+  ]
+}

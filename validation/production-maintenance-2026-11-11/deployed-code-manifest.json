@@ -1,0 +1,89 @@
+{
+  "backup": "/var/backups/kv260/maintenance-20261111T173451",
+  "files": [
+    {
+      "path": "server/app/api/health.py",
+      "sha256": "3dffdf5147ae413713704dc8c6ff943341d38844e8cf3f0c7d99ad29dd86c85d"
+    },
+    {
+      "path": "server/app/audit.py",
+      "sha256": "19a281d307a4da661a19b39c7ffb787ab44be1c118bdc977876251af37296b41"
+    },
+    {
+      "path": "server/app/config.py",
+      "sha256": "b272db1b212e67cea39b124776e4d74d2db7770d9c758086c4ad483959bbb785"
+    },
+    {
+      "path": "server/app/database.py",
+      "sha256": "2111074c8328217b6bc0d90af9cf02b0d7e8c6b3b75a287eda3180adb91aa3ec"
+    },
+    {
+      "path": "server/app/db_models.py",
+      "sha256": "e6837d702ba880a50b86243191878022093d4cf58ea554e2d810f2991fc6c49a"
+    },
+    {
+      "path": "server/app/lease_manager.py",
+      "sha256": "4e6ee141f58be8c0049d30da4ef4a09a8869a8a6893af29263f4c48f9a12016d"
+    },
+    {
+      "path": "server/app/main.py",
+      "sha256": "c5316a090e6181c151c41be09675609c3329d47842e61c5f6742a6b5c5f24dc6"
+    },
+    {
+      "path": "server/app/maintenance.py",
+      "sha256": "237c12b6b045fb9e4b36e007591eaa2ddc6dae88eaa61e7b9a1c3a41aea44835"
+    },
+    {
+      "path": "server/app/scheduler.py",
+      "sha256": "12232f0a1c83d544edd1c9afcaa35f36ea9c05fe81e63b848939f3d2eef2058a"
+    },
+    {
+      "path": "server/app/schemas.py",
+      "sha256": "27093f9b6c1385c99bd0c9bacbd4af63ec282431a5a0d5ca8436a82e96e1d90d"
+    },
+    {
+      "path": "server/app/worker_client.py",
+      "sha256": "83dfc55bdd30c31448bcf050f646d5e07595e5c42363a8319192aff2b1e984e0"
+    },
+    {
+      "path": "server/tests/test_fault_regressions.py",
+      "sha256": "1ffb9d8378ee78bde8da9b5a0cb0166672d1c76be94a4b9dc116e5e70a5a8367"
+    },
+    {
+      "path": "server/tests/test_production_maintenance.py",
+      "sha256": "ee59912a5ca19c3ff639fe160a04a2f4529f5c67cf1875c0cac27c39bea9a822"
+    },
+    {
+      "path": "server/tests/test_students.py",
+      "sha256": "e35dd4b33e0419eb095ea4ec8734b6135249e018b4ff8173e51e2efea2c4322c"
+    },
+    {
+      "path": "server/ui/dashboard.css",
+      "sha256": "8ed9be89a22eecc5bcb36879c69947e92c7029c5ae4621d18d128f3727613528"
+    },
+    {
+      "path": "server/ui/dashboard.js",
+      "sha256": "ed8fa584caef97fe3cba85dae3b9e85fc7f2bcbe2d1e641d487fd01a01a3a4d7"
+    },
+    {
+      "path": "server/ui/index.html",
+      "sha256": "6126c2a60c3849f7d769139d8be9d6b7e984462a134f12a0a2506f8a889b3c36"
+    },
+    {
+      "path": "worker/app/fpga.py",
+      "sha256": "21392a3529884c24ac9af3620f1c8157d822d56b5b6f18bfde0ca9303c1b6262"
+    },
+    {
+      "path": "worker/app/main.py",
+      "sha256": "0fe9c6fd653e41902dfeb8d6849fd18732fc80af04f1bedb810edecf52ab4b05"
+    },
+    {
+      "path": "worker/tests/test_dma_deadlines.py",
+      "sha256": "8112fd86dd8bf78249dce323a8693584024996211eb35e6f6e141b924d902d33"
+    },
+    {
+      "path": "worker/tests/test_worker.py",
+      "sha256": "78af665907d708908afb32e5c2ed559c12590dc7bc5c4c514aa0c84ab5e63d9f"
+    }
+  ]
+}

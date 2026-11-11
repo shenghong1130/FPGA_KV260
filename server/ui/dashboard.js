@@ -15,7 +15,7 @@ const state = {
 const statusText = {
   idle: "空闲", reserved: "已预留", deploying: "正在部署", ready: "已分配",
   busy: "正在计算", error: "错误", offline: "离线", queued: "排队中",
-  running: "运行中", completed: "已完成", failed: "失败", unassigned: "未分配",
+  running: "运行中", completed: "已完成", failed: "失败", cancelled: "已取消", unassigned: "未分配",
   releasing: "正在释放", lost: "Worker 丢失", archived: "已归档",
 };
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -193,7 +193,7 @@ function markOnline() {
   const workers = state.health?.workers || {};
   const degraded = safeCount(workers, "error") + safeCount(workers, "offline") > 0;
   const label = $("#platform-status"); label.className = `platform-status ${degraded ? "degraded" : "healthy"}`;
-  label.replaceChildren(node("span", { className: "status-dot" }), document.createTextNode(degraded ? "Degraded" : "Healthy"));
+  label.replaceChildren(node("span", { className: "status-dot" }), document.createTextNode(state.health?.maintenance_mode ? "Maintenance（维护中：写入与调度暂停）" : (degraded ? "Degraded" : "Healthy")));
   $("#last-update").textContent = state.lastSuccess.toLocaleTimeString();
   $("#offline-banner").classList.add("hidden");
 }
@@ -212,7 +212,7 @@ function renderOverview() {
     ["正在部署", "DEPLOYING", workers.deploying], ["离线", "OFFLINE", workers.offline],
     ["错误", "ERROR", workers.error], ["排队请求", "Queued Requests", requests.queued],
     ["运行请求", "Running Requests", requests.running], ["已完成请求", "Completed Requests", requests.completed],
-    ["失败请求", "Failed Requests", requests.failed],
+    ["失败请求", "Failed Requests", requests.failed], ["已取消", "Cancelled Requests", requests.cancelled],
   ];
   const container = $("#summary-cards"); clear(container);
   for (const [label, secondary, count] of cards) {
@@ -736,6 +736,7 @@ function renderStudents() {
       node("td", { text: item.worker_id || "—" }),
       node("td", { text: item.queued_requests }), node("td", { text: item.running_requests }),
       node("td", { text: item.completed_requests }), node("td", { text: item.failed_requests }),
+      node("td", { text: item.cancelled_requests || 0 }),
       node("td", { text: item.total_requests }),
       node("td", { text: formatTime(item.last_activity_at), title: item.last_activity_at || "" }),
       actions,
@@ -767,7 +768,7 @@ function startPolling(requestId, password) {
     attempts += 1;
     try {
       const item = await queryRequest(requestId, $("#predict-result"), password);
-      if (["completed", "failed"].includes(stateKey(item.status))) { stopPolling(); toast(item.status === "completed" ? "请求完成" : "请求失败", item.status === "completed" ? "success" : "error"); }
+      if (["completed", "failed", "cancelled"].includes(stateKey(item.status))) { stopPolling(); toast(item.status === "completed" ? "请求完成" : "请求失败", item.status === "completed" ? "success" : "error"); }
     } catch { /* The detail panel already contains the error. */ }
     if (attempts >= 150) { stopPolling(); toast("自动查询已停止，请手动查询 Request ID。", "warning"); }
   }, 2000);

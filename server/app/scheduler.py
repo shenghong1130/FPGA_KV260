@@ -43,6 +43,9 @@ class Scheduler:
                 lease.state = LeaseStatus.RESERVED.value
                 lease.last_activity_at = utcnow()
                 lease.error = None
+                lease.release_attempts = 0
+                lease.release_retry_at = None
+                lease.release_blocked = 0
                 database.commit()
                 return worker.board
 

@@ -105,7 +105,7 @@ async def test_student_list_request_counters_and_safe_fields(test_context) -> No
     assert set(item) == {
         "student_id", "latest_artifact_id", "latest_version", "lease_state",
         "worker_id", "queued_requests", "running_requests",
-        "completed_requests", "failed_requests", "total_requests",
+        "completed_requests", "failed_requests", "cancelled_requests", "total_requests",
         "last_activity_at",
     }
     serialized = response.text.lower()

@@ -110,7 +110,7 @@
       </section>
       <section class="panel request-list-panel">
         <div class="panel-title"><div><h3>最近计算请求</h3><p>Recent Predict Requests</p></div><span class="secondary">自动刷新 / Auto refresh</span></div>
-        <div class="toolbar compact-toolbar"><label>状态<select id="request-status-filter"><option value="all">全部 / All</option><option value="queued">QUEUED</option><option value="running">RUNNING</option><option value="completed">COMPLETED</option><option value="failed">FAILED</option></select></label><span id="request-filter-count" class="secondary"></span></div>
+        <div class="toolbar compact-toolbar"><label>状态<select id="request-status-filter"><option value="all">全部 / All</option><option value="queued">QUEUED</option><option value="running">RUNNING</option><option value="completed">COMPLETED</option><option value="failed">FAILED</option><option value="cancelled">CANCELLED</option></select></label><span id="request-filter-count" class="secondary"></span></div>
         <div id="request-list-error" class="alert danger hidden" role="alert">加载 Request 列表失败 / Failed to load requests</div>
         <div class="table-wrap"><table><thead><tr><th>Status</th><th>Request ID</th><th>Student</th><th>Artifact / Version</th><th>Worker</th><th>Created</th><th>Duration</th><th>Result</th><th>Error</th><th>Detail</th></tr></thead><tbody id="request-table"><tr><td class="empty" colspan="10">Loading...</td></tr></tbody></table></div>
       </section>
@@ -119,7 +119,7 @@
     <section id="view-student" class="view" data-view="student" aria-labelledby="student-title">
       <div class="section-heading"><div><h2 id="student-title">学生状态</h2><p>Student Status</p></div></div>
       <section class="panel query-panel"><label class="student-search-label" for="student-search-input">搜索 Student ID</label><input id="student-search-input" type="search" placeholder="student01" maxlength="128"><div id="student-list-error" class="alert danger hidden" role="alert">加载 Student 列表失败 / Failed to load students</div></section>
-      <div class="table-wrap panel flush"><table><thead><tr><th>Student</th><th>Latest</th><th>Lease</th><th>Worker</th><th>Queued</th><th>Running</th><th>Completed</th><th>Failed</th><th>Total</th><th>Last Activity</th><th>Actions</th></tr></thead><tbody id="student-table"><tr><td class="empty" colspan="11">Loading...</td></tr></tbody></table></div>
+      <div class="table-wrap panel flush"><table><thead><tr><th>Student</th><th>Latest</th><th>Lease</th><th>Worker</th><th>Queued</th><th>Running</th><th>Completed</th><th>Failed</th><th>Cancelled</th><th>Total</th><th>Last Activity</th><th>Actions</th></tr></thead><tbody id="student-table"><tr><td class="empty" colspan="12">Loading...</td></tr></tbody></table></div>
     </section>
 
     <section id="view-events" class="view" data-view="events" aria-labelledby="events-title">

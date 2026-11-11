@@ -109,6 +109,10 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PredictPayloadError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FpgaExecutionError as exc:
+            logging.getLogger(__name__).exception("FPGA execution failed lease=%s", body.lease_id)
+            raise HTTPException(status_code=500, detail=str(exc),
+                                headers={"X-KV260-Error-Code": "FPGA_EXECUTION_FAILED"}) from exc
         except Exception as exc:
             logging.getLogger(__name__).exception("FPGA predict failed lease=%s", body.lease_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc

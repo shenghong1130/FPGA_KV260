@@ -56,6 +56,7 @@ class RequestStatus(str, enum.Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class WorkerState(str, enum.Enum):
@@ -152,6 +153,9 @@ class StudentLease(Base):
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    release_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    release_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    release_blocked: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     request_count: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 

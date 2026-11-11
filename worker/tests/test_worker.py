@@ -247,4 +247,5 @@ async def test_hardware_predict_failure_returns_500_and_clears_ready(worker_cont
     )
     assert response.status_code == 500
     assert response.json()["detail"] == "DMA failed"
+    assert response.headers["X-KV260-Error-Code"] == "FPGA_EXECUTION_FAILED"
     assert (await client.get("/status")).json()["fpga_ready"] is False

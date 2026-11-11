@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from datetime import timedelta
 
 import httpx
 import pytest
 from sqlalchemy import select
 
-from app.db_models import Artifact, StudentLease, Worker, PredictRequestRecord
+from app.db_models import utcnow, Artifact, StudentLease, Worker, PredictRequestRecord
 from app.hardware_validation import validate_design, HardwareValidationError
 from app.worker_client import WorkerClientError, check_response, WorkerClient
 from testbed.design_fixture import make_bit, make_hwh
@@ -104,7 +105,7 @@ async def test_existing_sg_artifact_revalidated_before_worker_io(test_context):
 
 
 @pytest.mark.asyncio
-async def test_release_failure_preserves_three_way_ownership_and_pending(test_context):
+async def test_release_failure_preserves_three_way_ownership_and_pending(test_context,monkeypatch):
     client,fake = test_context
     await upload(client,'a'); await predict(client,'a')
     services = fake.application.state.services
@@ -116,14 +117,24 @@ async def test_release_failure_preserves_three_way_ownership_and_pending(test_co
     async def broken(*args):
         raise WorkerClientError('release offline')
     fake.release = broken
-    for _ in range(3):
+    clock=utcnow()
+    for index in range(3):
+        monkeypatch.setattr('app.lease_manager.utcnow',lambda index=index:clock+timedelta(seconds=10*index))
         await services.lease_manager.reap_once()
         await services.worker_registry._check_worker(board)
+    with services.database.sessions() as db:
+        assert db.get(StudentLease,'a').release_attempts==3
+        assert db.get(StudentLease,'a').release_blocked
+    for _ in range(5):
+        await services.lease_manager.reap_once()
+    with services.database.sessions() as db:
+        assert db.get(StudentLease,'a').release_attempts==3
     with services.database.sessions() as db:
         assert db.get(StudentLease,'a').lease_id == db.get(Worker,board).lease_id == fake.states[board]['lease_id'] == token
     queued = (await predict(client,'a')).json()
     assert queued['status'] == 'queued'
     fake.fail_predict_for.clear(); fake.release = original
+    assert await services.lease_manager.authorize_release_retry('a',token,'operator verified simulated network repair')
     await services.lease_manager.reap_once()
     for _ in range(100):
         item = (await client.get('/requests/'+queued['request_id'],headers=password_headers())).json()
@@ -337,7 +348,7 @@ async def test_late_predict_success_cannot_revive_offline_lease(test_context):
 
 
 @pytest.mark.asyncio
-async def test_lost_release_response_is_reconciled_by_idempotent_retry(test_context):
+async def test_lost_release_response_is_reconciled_by_idempotent_retry(test_context,monkeypatch):
     client,fake=test_context;services=fake.application.state.services
     await upload(client,'a');await predict(client,'a')
     with services.database.sessions() as db:
@@ -354,6 +365,8 @@ async def test_lost_release_response_is_reconciled_by_idempotent_retry(test_cont
     # A status poll must preserve the pending reconciliation identity.
     await services.worker_registry._check_worker(board)
     fake.release=original
+    clock=utcnow()
+    monkeypatch.setattr('app.lease_manager.utcnow',lambda:clock+timedelta(seconds=2))
     await services.lease_manager.reap_once()
     with services.database.sessions() as db:
         assert db.get(StudentLease,'a').lease_id is None

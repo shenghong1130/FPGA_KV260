@@ -1,0 +1,766 @@
+{
+  "initial_sample": "2026-11-11T17:08:13.908771+08:00",
+  "followup_sample": "2026-11-11T17:14:51.602234+08:00",
+  "final_sample": "2026-11-11T17:24:24.309916+08:00",
+  "service": "MainPID=1173442\nExecMainStartTimestamp=Wed 2026-11-11 17:02:26 CST\nExecStart={ path=/home/robot/kv260/server/.venv/bin/uvicorn ; argv[]=/home/robot/kv260/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 ; ignore_errors=no ; start_time=[Wed 2026-11-11 17:02:26 CST] ; stop_time=[n/a] ; pid=1173442 ; code=(null) ; status=0/0 }\nWorkingDirectory=/home/robot/kv260/server\nActiveState=active\nSubState=running\nFragmentPath=/etc/systemd/system/robot-kv260.service\nDropInPaths=\nNeedDaemonReload=no\n",
+  "process": {
+    "cwd": "/home/robot/kv260/server",
+    "exe": "/usr/bin/python3.12",
+    "cmdline": "/home/robot/kv260/server/.venv/bin/python /home/robot/kv260/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 ",
+    "environment": {},
+    "db_fds": [
+      "/home/robot/kv260/server/data/central.db",
+      "/home/robot/kv260/server/data/central.db-wal",
+      "/home/robot/kv260/server/data/central.db-shm"
+    ]
+  },
+  "disk_git": "2edd3893c31a5639a37292493b73185b0f98863d 2026-11-11T17:04:01+08:00 change\n",
+  "source": {
+    "server/app/lease_manager.py": {
+      "sha256": "d3c0304612e8c13fea725e8b4ad6a30162ba59cff663efbd8b15e742a405ff47",
+      "mtime": "2026-11-11T16:52:27.116477+08:00"
+    },
+    "server/app/worker_client.py": {
+      "sha256": "6acb369a85d913682c30802314bf78ffd4ed0495bab5175caf7227fb89499951",
+      "mtime": "2026-11-11T16:52:27.115009+08:00"
+    },
+    "server/app/artifact_store.py": {
+      "sha256": "3446a02fe551ad2b8f265a0b4a9ea760cb5cd0dd5cdc47f845c464bd5ab709db",
+      "mtime": "2026-11-11T16:52:27.114085+08:00"
+    },
+    "server/app/database.py": {
+      "sha256": "5600895f758e4616ce75b6753e16121dcfe18b26b9923d4fa096f27daf77d4ee",
+      "mtime": "2026-11-11T16:52:27.117406+08:00"
+    },
+    "server/app/hardware_validation.py": {
+      "sha256": "9ba4bf6418f6807e34be6b6f2b92f3a3a067cc019ad85ee8ffe23c60d02e68b4",
+      "mtime": "2026-11-11T16:52:27.117606+08:00"
+    },
+    "worker/app/state.py": {
+      "sha256": "ce02118f3c48ae328670861505d8c0542abfc3bc155dbc61ddd97e7414d58cc9",
+      "mtime": "2026-11-11T16:52:27.126256+08:00"
+    },
+    "worker/app/fpga.py": {
+      "sha256": "0af8778b58c600e7a2c551f1d752ff6bf006dbacb11f35adaa160ca798d8fb03",
+      "mtime": "2026-11-11T16:52:27.125123+08:00"
+    },
+    "worker/app/hardware_validation.py": {
+      "sha256": "9ba4bf6418f6807e34be6b6f2b92f3a3a067cc019ad85ee8ffe23c60d02e68b4",
+      "mtime": "2026-11-11T16:52:27.126471+08:00"
+    }
+  },
+  "prior_tested_source_hashes_all_match": true,
+  "database": {
+    "path": "/home/robot/kv260/server/data/central.db",
+    "journal_mode": "wal",
+    "request_columns": [
+      "id",
+      "student_id",
+      "artifact_id",
+      "artifact_version",
+      "status",
+      "payload",
+      "result",
+      "created_at",
+      "started_at",
+      "completed_at",
+      "error",
+      "worker_id",
+      "deploy_attempts"
+    ],
+    "integrity": "ok"
+  },
+  "workers": [
+    {
+      "central": {
+        "board": "kv2601",
+        "base_url": "http://192.168.31.82:8080",
+        "state": "ERROR",
+        "session_id": "lease_bd32eb5dadfa47bdbf0c574a4554741d",
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-11-11 09:08:12.812070",
+        "last_error": "Worker HTTP 409: lease does not own worker"
+      },
+      "remote": {
+        "http_status": 200,
+        "body": {
+          "board": "kv2601",
+          "fpga_ready": false,
+          "lease_id": null,
+          "artifact_id": null
+        }
+      }
+    },
+    {
+      "central": {
+        "board": "kv26010",
+        "base_url": "http://192.168.31.91:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 03:23:30.234577",
+        "last_error": "GET http://192.168.31.91:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26011",
+        "base_url": "http://192.168.31.92:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 05:19:12.276849",
+        "last_error": "GET http://192.168.31.92:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26012",
+        "base_url": "http://192.168.31.93:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 06:02:19.171186",
+        "last_error": "GET http://192.168.31.93:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26013",
+        "base_url": "http://192.168.31.94:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 05:51:16.516972",
+        "last_error": "GET http://192.168.31.94:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26014",
+        "base_url": "http://192.168.31.95:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-09 03:43:18.553014",
+        "last_error": "GET http://192.168.31.95:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26015",
+        "base_url": "http://192.168.31.96:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 06:50:07.644982",
+        "last_error": "GET http://192.168.31.96:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26016",
+        "base_url": "http://192.168.31.97:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 08:38:06.473656",
+        "last_error": "GET http://192.168.31.97:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26017",
+        "base_url": "http://192.168.31.98:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 08:52:41.334192",
+        "last_error": "GET http://192.168.31.98:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26018",
+        "base_url": "http://192.168.31.99:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 10:00:36.540529",
+        "last_error": "GET http://192.168.31.99:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv26019",
+        "base_url": "http://192.168.31.100:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 09:53:12.131055",
+        "last_error": "GET http://192.168.31.100:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv2602",
+        "base_url": "http://192.168.31.83:8080",
+        "state": "ERROR",
+        "session_id": "lease_d455fd81936641b382c215b568d2bf3b",
+        "current_artifact_id": "art_6400915f86554d81987d49c34217a1c1",
+        "fpga_ready": 0,
+        "last_seen": "2026-11-11 09:08:12.817447",
+        "last_error": "worker reports ownership unknown to Central Server"
+      },
+      "remote": {
+        "http_status": 200,
+        "body": {
+          "board": "kv2602",
+          "fpga_ready": false,
+          "lease_id": null,
+          "artifact_id": null
+        }
+      }
+    },
+    {
+      "central": {
+        "board": "kv26020",
+        "base_url": "http://192.168.31.101:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-09 04:15:31.258163",
+        "last_error": "GET http://192.168.31.101:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv2603",
+        "base_url": "http://192.168.31.84:8080",
+        "state": "ERROR",
+        "session_id": "lease_39a6a580529544c095f184f7fa1508cb",
+        "current_artifact_id": "art_574a91450dd247b0894f22934778fc24",
+        "fpga_ready": 1,
+        "last_seen": "2026-11-11 09:08:12.865015",
+        "last_error": "worker reports ownership unknown to Central Server"
+      },
+      "remote": {
+        "http_status": 200,
+        "body": {
+          "board": "kv2603",
+          "fpga_ready": true,
+          "lease_id": "lease_39a6a580529544c095f184f7fa1508cb",
+          "artifact_id": "art_574a91450dd247b0894f22934778fc24"
+        }
+      }
+    },
+    {
+      "central": {
+        "board": "kv2604",
+        "base_url": "http://192.168.31.85:8080",
+        "state": "ERROR",
+        "session_id": "lease_9e88f8a97f65479faa853925b6a9de5b",
+        "current_artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+        "fpga_ready": 0,
+        "last_seen": "2026-11-11 09:08:12.826649",
+        "last_error": "worker reports ownership unknown to Central Server"
+      },
+      "remote": {
+        "http_status": 200,
+        "body": {
+          "board": "kv2604",
+          "fpga_ready": false,
+          "lease_id": "lease_9e88f8a97f65479faa853925b6a9de5b",
+          "artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4"
+        }
+      }
+    },
+    {
+      "central": {
+        "board": "kv2605",
+        "base_url": "http://192.168.31.86:8080",
+        "state": "ERROR",
+        "session_id": "lease_c85a11cb4af54a8fb2a848eca6089c99",
+        "current_artifact_id": "art_574a91450dd247b0894f22934778fc24",
+        "fpga_ready": 1,
+        "last_seen": "2026-11-11 09:08:12.873449",
+        "last_error": "worker reports ownership unknown to Central Server"
+      },
+      "remote": {
+        "http_status": 200,
+        "body": {
+          "board": "kv2605",
+          "fpga_ready": true,
+          "lease_id": "lease_c85a11cb4af54a8fb2a848eca6089c99",
+          "artifact_id": "art_574a91450dd247b0894f22934778fc24"
+        }
+      }
+    },
+    {
+      "central": {
+        "board": "kv2606",
+        "base_url": "http://192.168.31.87:8080",
+        "state": "ERROR",
+        "session_id": "lease_ad38e460fe7f435697a732daec7749fa",
+        "current_artifact_id": "art_574a91450dd247b0894f22934778fc24",
+        "fpga_ready": 1,
+        "last_seen": "2026-11-11 09:08:12.869131",
+        "last_error": "worker reports ownership unknown to Central Server"
+      },
+      "remote": {
+        "http_status": 200,
+        "body": {
+          "board": "kv2606",
+          "fpga_ready": true,
+          "lease_id": "lease_ad38e460fe7f435697a732daec7749fa",
+          "artifact_id": "art_574a91450dd247b0894f22934778fc24"
+        }
+      }
+    },
+    {
+      "central": {
+        "board": "kv2607",
+        "base_url": "http://192.168.31.88:8080",
+        "state": "ERROR",
+        "session_id": "lease_e338842eba644c8cb0e47b73e064eac4",
+        "current_artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+        "fpga_ready": 0,
+        "last_seen": "2026-11-11 09:08:12.822394",
+        "last_error": "worker reports ownership unknown to Central Server"
+      },
+      "remote": {
+        "http_status": 200,
+        "body": {
+          "board": "kv2607",
+          "fpga_ready": false,
+          "lease_id": "lease_e338842eba644c8cb0e47b73e064eac4",
+          "artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4"
+        }
+      }
+    },
+    {
+      "central": {
+        "board": "kv2608",
+        "base_url": "http://192.168.31.89:8080",
+        "state": "OFFLINE",
+        "session_id": null,
+        "current_artifact_id": null,
+        "fpga_ready": 0,
+        "last_seen": "2026-09-08 03:42:53.259052",
+        "last_error": "GET http://192.168.31.89:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    },
+    {
+      "central": {
+        "board": "kv2609",
+        "base_url": "http://192.168.31.90:8080",
+        "state": "OFFLINE",
+        "session_id": "lease_2e58eb0e3580460e8b2d21e1ce713043",
+        "current_artifact_id": "art_55f5803f28fa4c00aafe60880e3db29c",
+        "fpga_ready": 0,
+        "last_seen": "2026-09-07 09:58:43.367080",
+        "last_error": "GET http://192.168.31.90:8080/health failed: "
+      },
+      "remote": {
+        "error": "All connection attempts failed"
+      }
+    }
+  ],
+  "orphan_workers": [
+    {
+      "board": "kv2602",
+      "state": "ERROR",
+      "session_id": "lease_d455fd81936641b382c215b568d2bf3b",
+      "current_artifact_id": "art_6400915f86554d81987d49c34217a1c1"
+    },
+    {
+      "board": "kv2603",
+      "state": "ERROR",
+      "session_id": "lease_39a6a580529544c095f184f7fa1508cb",
+      "current_artifact_id": "art_574a91450dd247b0894f22934778fc24"
+    },
+    {
+      "board": "kv2604",
+      "state": "ERROR",
+      "session_id": "lease_9e88f8a97f65479faa853925b6a9de5b",
+      "current_artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4"
+    },
+    {
+      "board": "kv2605",
+      "state": "ERROR",
+      "session_id": "lease_c85a11cb4af54a8fb2a848eca6089c99",
+      "current_artifact_id": "art_574a91450dd247b0894f22934778fc24"
+    },
+    {
+      "board": "kv2606",
+      "state": "ERROR",
+      "session_id": "lease_ad38e460fe7f435697a732daec7749fa",
+      "current_artifact_id": "art_574a91450dd247b0894f22934778fc24"
+    },
+    {
+      "board": "kv2607",
+      "state": "ERROR",
+      "session_id": "lease_e338842eba644c8cb0e47b73e064eac4",
+      "current_artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4"
+    },
+    {
+      "board": "kv2609",
+      "state": "OFFLINE",
+      "session_id": "lease_2e58eb0e3580460e8b2d21e1ce713043",
+      "current_artifact_id": "art_55f5803f28fa4c00aafe60880e3db29c"
+    }
+  ],
+  "broken_student_links": [
+    {
+      "student_id": "student01",
+      "state": "LOST",
+      "worker_id": "kv2601",
+      "lease_id": "lease_ff1206dadd7445a78f97dfc7ec9e75e1"
+    },
+    {
+      "student_id": "216邵卿宇",
+      "state": "LOST",
+      "worker_id": "kv2607",
+      "lease_id": "lease_3ea348f4f28c4a848b95be3bf89838c0"
+    },
+    {
+      "student_id": "2024010454",
+      "state": "LOST",
+      "worker_id": "kv2601",
+      "lease_id": "lease_d6547d84750348fd9ff29708fcbcc959"
+    },
+    {
+      "student_id": "2024011836",
+      "state": "LOST",
+      "worker_id": "kv2602",
+      "lease_id": "lease_56d8f28d145c4fa0a8950822d5107785"
+    },
+    {
+      "student_id": "huanganran",
+      "state": "LOST",
+      "worker_id": "kv2601",
+      "lease_id": "lease_82e33fa344ce4a02bf451457aab8979e"
+    },
+    {
+      "student_id": "2024010432",
+      "state": "LOST",
+      "worker_id": "kv2601",
+      "lease_id": "lease_91229bebd5b24f8ba7bfdf3cc662e53f"
+    },
+    {
+      "student_id": "archetto",
+      "state": "LOST",
+      "worker_id": "kv2601",
+      "lease_id": "lease_eaf33178b03a47b4a58c6ec1ec3a28d6"
+    }
+  ],
+  "duplicate_worker_claims": [
+    {
+      "worker_id": "kv2601",
+      "count": 6
+    }
+  ],
+  "ownership_audit_hints": {
+    "kv2602": {
+      "matching_audit": [
+        {
+          "event_type": "WORKER_ASSIGNED",
+          "student_id": "2024010432",
+          "artifact_id": "art_6400915f86554d81987d49c34217a1c1",
+          "request_id": null,
+          "created_at": "2026-11-11 08:53:59.896937",
+          "details": "{\"lease_id\": \"lease_d455fd81936641b382c215b568d2bf3b\"}"
+        }
+      ],
+      "artifact_owner_hint": [
+        {
+          "id": "art_6400915f86554d81987d49c34217a1c1",
+          "student_id": "2024010432",
+          "status": "READY"
+        }
+      ]
+    },
+    "kv2603": {
+      "matching_audit": [
+        {
+          "event_type": "WORKER_ASSIGNED",
+          "student_id": "2024010432",
+          "artifact_id": "art_574a91450dd247b0894f22934778fc24",
+          "request_id": null,
+          "created_at": "2026-11-11 07:38:43.952466",
+          "details": "{\"lease_id\": \"lease_39a6a580529544c095f184f7fa1508cb\"}"
+        }
+      ],
+      "artifact_owner_hint": [
+        {
+          "id": "art_574a91450dd247b0894f22934778fc24",
+          "student_id": "2024010432",
+          "status": "READY"
+        }
+      ]
+    },
+    "kv2604": {
+      "matching_audit": [
+        {
+          "event_type": "WORKER_ASSIGNED",
+          "student_id": "huanganran",
+          "artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+          "request_id": null,
+          "created_at": "2026-11-11 07:27:31.105116",
+          "details": "{\"lease_id\": \"lease_9e88f8a97f65479faa853925b6a9de5b\"}"
+        }
+      ],
+      "artifact_owner_hint": [
+        {
+          "id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+          "student_id": "huanganran",
+          "status": "READY"
+        }
+      ]
+    },
+    "kv2605": {
+      "matching_audit": [
+        {
+          "event_type": "WORKER_ASSIGNED",
+          "student_id": "2024010432",
+          "artifact_id": "art_574a91450dd247b0894f22934778fc24",
+          "request_id": null,
+          "created_at": "2026-11-11 07:42:54.118635",
+          "details": "{\"lease_id\": \"lease_c85a11cb4af54a8fb2a848eca6089c99\"}"
+        }
+      ],
+      "artifact_owner_hint": [
+        {
+          "id": "art_574a91450dd247b0894f22934778fc24",
+          "student_id": "2024010432",
+          "status": "READY"
+        }
+      ]
+    },
+    "kv2606": {
+      "matching_audit": [
+        {
+          "event_type": "WORKER_ASSIGNED",
+          "student_id": "2024010432",
+          "artifact_id": "art_574a91450dd247b0894f22934778fc24",
+          "request_id": null,
+          "created_at": "2026-11-11 07:32:53.632135",
+          "details": "{\"lease_id\": \"lease_ad38e460fe7f435697a732daec7749fa\"}"
+        }
+      ],
+      "artifact_owner_hint": [
+        {
+          "id": "art_574a91450dd247b0894f22934778fc24",
+          "student_id": "2024010432",
+          "status": "READY"
+        }
+      ]
+    },
+    "kv2607": {
+      "matching_audit": [
+        {
+          "event_type": "WORKER_ASSIGNED",
+          "student_id": "huanganran",
+          "artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+          "request_id": null,
+          "created_at": "2026-11-11 07:22:13.006564",
+          "details": "{\"lease_id\": \"lease_e338842eba644c8cb0e47b73e064eac4\"}"
+        }
+      ],
+      "artifact_owner_hint": [
+        {
+          "id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+          "student_id": "huanganran",
+          "status": "READY"
+        }
+      ]
+    },
+    "kv2609": {
+      "matching_audit": [
+        {
+          "event_type": "WORKER_ASSIGNED",
+          "student_id": "student01",
+          "artifact_id": "art_55f5803f28fa4c00aafe60880e3db29c",
+          "request_id": null,
+          "created_at": "2026-09-07 09:58:21.176580",
+          "details": "{\"lease_id\": \"lease_2e58eb0e3580460e8b2d21e1ce713043\"}"
+        }
+      ],
+      "artifact_owner_hint": [
+        {
+          "id": "art_55f5803f28fa4c00aafe60880e3db29c",
+          "student_id": "student01",
+          "status": "READY"
+        }
+      ]
+    }
+  },
+  "bad_artifact": [
+    {
+      "id": "art_6a09148accf942bbaf7ff8b89065f2dd",
+      "status": "FAILED"
+    }
+  ],
+  "bad_requests": [
+    {
+      "id": "req_ff61da8e1ee14027a3ff06b9b575bcfd",
+      "status": "FAILED",
+      "created_at": "2026-11-11 06:54:38.307913",
+      "completed_at": "2026-11-11 09:02:29.427040",
+      "error": "axi_dma_0 must use Simple DMA: C_INCLUDE_SG=0; Scatter Gather is unsupported",
+      "deploy_attempts": 0
+    },
+    {
+      "id": "req_b66adec2b68f43a9b21f7652101a6cdf",
+      "status": "FAILED",
+      "created_at": "2026-11-11 06:43:20.674964",
+      "completed_at": "2026-11-11 09:02:29.427035",
+      "error": "axi_dma_0 must use Simple DMA: C_INCLUDE_SG=0; Scatter Gather is unsupported",
+      "deploy_attempts": 0
+    },
+    {
+      "id": "req_dba8f5ccc0674f458dc713baaf7962dd",
+      "status": "FAILED",
+      "created_at": "2026-11-11 06:39:38.321021",
+      "completed_at": "2026-11-11 09:02:29.427031",
+      "error": "axi_dma_0 must use Simple DMA: C_INCLUDE_SG=0; Scatter Gather is unsupported",
+      "deploy_attempts": 0
+    },
+    {
+      "id": "req_95094c4989864bd19c3d63bddf1afeeb",
+      "status": "FAILED",
+      "created_at": "2026-11-11 06:39:16.355233",
+      "completed_at": "2026-11-11 09:02:29.427027",
+      "error": "axi_dma_0 must use Simple DMA: C_INCLUDE_SG=0; Scatter Gather is unsupported",
+      "deploy_attempts": 0
+    },
+    {
+      "id": "req_1b4ebeb405494ec9be1ec0a9e624c44c",
+      "status": "FAILED",
+      "created_at": "2026-11-11 06:38:27.285896",
+      "completed_at": "2026-11-11 09:02:29.427017",
+      "error": "axi_dma_0 must use Simple DMA: C_INCLUDE_SG=0; Scatter Gather is unsupported",
+      "deploy_attempts": 0
+    }
+  ],
+  "failure_stats": [
+    {
+      "count": 732,
+      "last": "2026-11-11 09:02:29.431976"
+    }
+  ],
+  "post_start_static_failures": [
+    {
+      "event_type": "FPGA_DEPLOY_FAILED",
+      "board": "kv2601",
+      "artifact_id": "art_6a09148accf942bbaf7ff8b89065f2dd",
+      "request_id": "req_1b4ebeb405494ec9be1ec0a9e624c44c",
+      "created_at": "2026-11-11 09:02:29.431976",
+      "details": "{\"error\": \"axi_dma_0 must use Simple DMA: C_INCLUDE_SG=0; Scatter Gather is unsupported\"}"
+    }
+  ],
+  "post_start_http_deploy_count_through_followup": 0,
+  "queue": [
+    {
+      "id": "req_d34cda822857429582275025d2c37347",
+      "student_id": "huanganran",
+      "artifact_id": "art_fcb2a4b9eaa74e83ab4acaab5d0fe6c4",
+      "deploy_attempts": 0,
+      "created_at": "2026-11-11 09:02:54.413434"
+    }
+  ],
+  "active_lease_states": [],
+  "final_check": {
+    "time": "2026-11-11T17:24:24.309916+08:00",
+    "service": "MainPID=1173442\nExecMainStartTimestamp=Wed 2026-11-11 17:02:26 CST\nActiveState=active\n",
+    "request_counts": [
+      [
+        "COMPLETED",
+        2059
+      ],
+      [
+        "FAILED",
+        27
+      ],
+      [
+        "QUEUED",
+        1
+      ]
+    ],
+    "worker_counts": [
+      [
+        "ERROR",
+        7
+      ],
+      [
+        "OFFLINE",
+        13
+      ]
+    ],
+    "bad_last": [
+      732,
+      "2026-11-11 09:02:29.431976"
+    ]
+  },
+  "ssh_access": {
+    "kv2601": "authentication denied; remote version/hash/journal unverified",
+    "kv2602": "authentication denied; remote version/hash/journal unverified",
+    "kv2603": "authentication denied; remote version/hash/journal unverified",
+    "kv2604": "authentication denied; remote version/hash/journal unverified",
+    "kv2605": "authentication denied; remote version/hash/journal unverified",
+    "kv2606": "authentication denied; remote version/hash/journal unverified",
+    "kv2607": "authentication denied; remote version/hash/journal unverified"
+  },
+  "new_offline_source_sha256": {
+    "server/testbed/recovery_acceptance.py": "6f30c234befa7a57611328946155f4cd2523ac9adcef42ea7f464856551b1a75",
+    "server/tests/test_recovery_acceptance.py": "0e83cab501c39018559b3c9549f0d368e5a2dc0ba4b8ca859ebb2a6e6dcbd884"
+  }
+}

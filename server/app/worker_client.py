@@ -27,7 +27,8 @@ def check_response(response: httpx.Response) -> None:
         detail = response.reason_phrase
     detail = str(detail).replace("\r", " ").replace("\n", " ")[:2048]
     # Legacy Workers returned 500 for their deterministic SG rejection.
-    permanent = response.status_code == 422 or "must use Simple DMA" in detail
+    permanent = (response.status_code == 422 or "must use Simple DMA" in detail or
+                 response.headers.get("X-KV260-Error-Code") == "FPGA_EXECUTION_FAILED")
     raise WorkerClientError(
         f"Worker HTTP {response.status_code}: {detail}", permanent=permanent,
         retryable=response.status_code in {502, 503, 504},
