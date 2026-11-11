@@ -98,16 +98,29 @@ class PynqFpgaBackend:
             buffer.freebuffer()
 
     def _clear_runtime(self) -> None:
-        buffers = (self.x_buffer, self.y_buffer)
-        self.x_buffer = None
-        self.y_buffer = None
+        # Never return CMA pages to the allocator while a channel could still
+        # write them. On stop failure retain references and quarantine this
+        # Worker; a later release may retry cleanup under the same Worker lock.
+        stop_errors = []
+        if self.dma is not None:
+            for name in ("sendchannel", "recvchannel"):
+                channel = getattr(self.dma, name, None)
+                if channel is not None and hasattr(channel, "stop"):
+                    try:
+                        channel.stop()
+                    except Exception as exc:
+                        stop_errors.append(str(exc))
+        if stop_errors:
+            raise RuntimeError("cannot safely stop DMA: " + "; ".join(stop_errors))
         self.dma = None
         self.overlay = None
         first_error: Exception | None = None
-        for buffer in buffers:
+        for name in ("x_buffer", "y_buffer"):
             try:
-                self._free_buffer(buffer)
-            except Exception as exc:  # cleanup both CMA buffers before reporting
+                self._free_buffer(getattr(self, name))
+                setattr(self, name, None)
+            except Exception as exc:
+                # Retain the failed resource so a later release can retry it.
                 first_error = first_error or exc
         if first_error is not None:
             raise RuntimeError(f"failed to release a PYNQ DMA buffer: {first_error}") from first_error
@@ -145,8 +158,7 @@ class PynqFpgaBackend:
             x_buffer = allocate_factory(shape=(3, 28, 28), dtype=np.float32)
             y_buffer = allocate_factory(shape=(12,), dtype=np.float32)
         except Exception:
-            self._free_buffer(x_buffer)
-            self._free_buffer(y_buffer)
+            self.x_buffer, self.y_buffer = x_buffer, y_buffer
             self._clear_runtime()
             raise
 

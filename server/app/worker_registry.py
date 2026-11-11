@@ -113,6 +113,7 @@ class WorkerRegistry:
             if worker is None:
                 return
             endpoint = Worker(board=worker.board, base_url=worker.base_url)
+            snapshot = (worker.lease_id, worker.state, worker.current_artifact_id)
 
         # Phase B: no database Session is open while waiting for Worker I/O.
         try:
@@ -127,7 +128,8 @@ class WorkerRegistry:
             # Phase C (failure): reopen and reconcile against current state.
             with self.sessions() as database:
                 worker = database.get(Worker, board)
-                if worker is None or worker.base_url != endpoint.base_url:
+                if (worker is None or worker.base_url != endpoint.base_url or
+                        (worker.lease_id, worker.state, worker.current_artifact_id) != snapshot):
                     return
                 previous_state = worker.state
                 failed_request = self._mark_offline(database, worker, str(exc))
@@ -158,18 +160,28 @@ class WorkerRegistry:
         # changed IDLE to RESERVED/DEPLOYING/BUSY while HTTP was in flight.
         with self.sessions() as database:
             worker = database.get(Worker, board)
-            if worker is None or worker.base_url != endpoint.base_url:
+            if (worker is None or worker.base_url != endpoint.base_url or
+                        (worker.lease_id, worker.state, worker.current_artifact_id) != snapshot):
                 return
             previous_state = worker.state
+            previous_error = worker.last_error
             worker.last_seen = utcnow()
-            worker.last_error = None
             remote_lease = status.get("lease_id")
             remote_artifact = status.get("artifact_id")
             active = None
             if worker.lease_id:
                 active = database.scalar(select(StudentLease).where(
                     StudentLease.lease_id == worker.lease_id))
-            if active and active.state in ACTIVE_LEASE_STATES:
+            if active and active.worker_id != board:
+                worker.state = WorkerState.ERROR.value
+                worker.last_error = "lease owner refers to another worker"
+                worker.fpga_ready = int(bool(status.get("fpga_ready")))
+            elif active and active.state in {LeaseStatus.ERROR.value, LeaseStatus.LOST.value}:
+                # Preserve both sides until fenced release acknowledges cleanup.
+                worker.fpga_ready = int(bool(status.get("fpga_ready")))
+                worker.state = WorkerState.ERROR.value
+                worker.last_error = active.error or "lease requires recovery"
+            elif active and active.state in ACTIVE_LEASE_STATES:
                 if not recovery and active.state in {
                     LeaseStatus.RESERVED.value,
                     LeaseStatus.DEPLOYING.value,
@@ -178,8 +190,10 @@ class WorkerRegistry:
                 }:
                     database.commit()
                     return
-                if remote_lease == active.lease_id and remote_artifact == active.current_artifact_id:
-                    worker.fpga_ready = int(bool(status.get("fpga_ready")))
+                worker.fpga_ready = int(bool(status.get("fpga_ready")))
+                if (remote_lease == active.lease_id and remote_artifact == active.current_artifact_id
+                        and worker.fpga_ready):
+                    worker.last_error = None
                     # During normal monitoring, health/status must not overwrite
                     # an in-flight RESERVED/DEPLOYING/BUSY transition. Recovery
                     # after a Central restart has no such in-memory operation.
@@ -191,19 +205,32 @@ class WorkerRegistry:
                     worker.last_error = "worker ownership differs from persistent lease"
                     active.state = LeaseStatus.LOST.value
                     active.error = worker.last_error
-            elif remote_lease:
+            elif remote_lease or worker.lease_id:
                 worker.state = WorkerState.ERROR.value
-                worker.lease_id = str(remote_lease)
-                worker.current_artifact_id = (
-                    str(remote_artifact) if remote_artifact is not None else None
-                )
+                worker.fpga_ready = int(bool(status.get("fpga_ready")))
+                # Preserve persistent ownership on mismatch for investigation.
+                worker.lease_id = worker.lease_id or str(remote_lease)
+                if worker.current_artifact_id is None and remote_artifact is not None:
+                    worker.current_artifact_id = str(remote_artifact)
                 worker.last_error = "worker reports ownership unknown to Central Server"
             else:
-                worker.state = WorkerState.IDLE.value
+                worker.state = WorkerState.ERROR.value if status.get("fpga_ready") else WorkerState.IDLE.value
+                worker.last_error = "unowned FPGA reports ready" if status.get("fpga_ready") else None
                 worker.lease_id = None
+                worker.current_artifact_id = None
                 worker.fpga_ready = int(bool(status.get("fpga_ready")))
             database.commit()
             current_state = worker.state
+            current_error = worker.last_error
+        if current_state == WorkerState.ERROR.value and (
+                previous_state != current_state or previous_error != current_error):
+            LOGGER.error("Worker quarantined board=%s remote_lease=%s error=%s", board, remote_lease, current_error)
+            self.audit.record(
+                "WORKER_QUARANTINED", level="ERROR", board=board,
+                message=current_error or "Worker requires recovery",
+                details={"remote_lease": remote_lease, "remote_artifact": remote_artifact,
+                         "fpga_ready": bool(status.get("fpga_ready"))},
+            )
         if (
             previous_state in {WorkerState.OFFLINE.value, WorkerState.ERROR.value}
             and current_state in {WorkerState.IDLE.value, WorkerState.READY.value}
@@ -220,11 +247,13 @@ class WorkerRegistry:
     ) -> dict[str, str] | None:
         failed_request = None
         worker.state = WorkerState.OFFLINE.value
+        worker.fpga_ready = 0
         worker.last_error = error
         if worker.lease_id:
             active = database.scalar(select(StudentLease).where(
                 StudentLease.lease_id == worker.lease_id))
-            if active and active.state in ACTIVE_LEASE_STATES:
+            if (active and active.worker_id == worker.board and
+                    active.state in ACTIVE_LEASE_STATES):
                 active.state = LeaseStatus.LOST.value
                 active.error = f"worker {worker.board} offline: {error}"
                 running = database.scalar(select(PredictRequestRecord).where(

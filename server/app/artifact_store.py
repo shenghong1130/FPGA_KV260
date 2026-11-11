@@ -8,13 +8,13 @@ import re
 import shutil
 import tempfile
 import uuid
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .hardware_validation import HardwareValidationError, validate_paths
 from .db_models import Artifact, ArtifactStatus, utcnow
 
 
@@ -97,9 +97,9 @@ class ArtifactStore:
                 hwh, hwh_path, ".hwh", self.max_hwh_size
             )
             try:
-                ET.parse(hwh_path)
-            except ET.ParseError as exc:
-                raise ArtifactValidationError(f"invalid HWH XML: {exc}") from exc
+                await asyncio.to_thread(validate_paths, bit_path, hwh_path)
+            except HardwareValidationError as exc:
+                raise ArtifactValidationError(str(exc)) from exc
             async with self.version_allocation_lock:
                 with self.sessions() as database:
                     version = self._next_version(database, student_id)

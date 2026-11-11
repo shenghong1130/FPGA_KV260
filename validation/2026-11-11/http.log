@@ -1,0 +1,133 @@
+[PASS] Artifacts uploaded with server-generated versions
+[PASS] Fixed Worker reused; Artifact deployed once
+[PASS] No IDLE Worker -> persistent request queued
+[PASS] LRU reclaim allocated Worker and completed queued request
+[PASS] Sessionless API and Lease/Request health report verified
+
+ALL TESTS PASSED
+
+============================================================
+KV260 Multi-Student Persistence Test
+============================================================
+
+Central Server : http://127.0.0.1:58713
+Students       : 5
+Artifact       : SAME bit/hwh for all students
+Image          : SAME jpg for all students
+
+Central Server ONLINE
+
+================================================================
+PHASE 1 - SAME Artifact -> 5 Students
+================================================================
+[UPLOAD] persist01  v1    art_497be65b09274e3cbe87b2de175870bc
+[UPLOAD] persist02  v1    art_506ce53390ab497ea3098830c59d5f7e
+[UPLOAD] persist03  v1    art_3c0dd3ecab2147829a7376b4f6ed676f
+[UPLOAD] persist04  v1    art_e8b0209d0b5d4acfb20e032ccd00e832
+[UPLOAD] persist05  v1    art_b74ba52bbf0e40069bc8e2351266c52d
+
+BIT SHA256 : SAME OK
+HWH SHA256 : SAME OK
+Artifact ID: UNIQUE OK
+
+================================================================
+PHASE 2 - 5 Simultaneous Predict Requests
+================================================================
+
+Five tasks are waiting at the start barrier...
+Releasing 5 HTTP requests simultaneously...
+
+[SUBMIT] persist01  HTTP 202 queued     -            req_a1acbcdf4cb241dd86c90a93c5b437fa
+[SUBMIT] persist02  HTTP 202 queued     -            req_65f7b867a2c548328eed43b80dd8eb46
+[SUBMIT] persist03  HTTP 202 queued     -            req_6a194b8901664f87a2484a5bee086ba5
+[SUBMIT] persist04  HTTP 202 queued     -            req_509f245f76234568b30c00cc40ae0f4f
+[SUBMIT] persist05  HTTP 202 queued     -            req_1dfb3bc123ca4f48944f671f96bdecf2
+
+Saved original request IDs: /tmp/kv260-http-regression-bxr_zccn/multi_student_test_state.json
+
+================================================================
+PHASE 3 - Request Processing
+================================================================
+[STATE] persist01 req_a1acbcdf4cb241dd86c90a93c5b437fa queued    -> completed worker=mock-kv2602
+[STATE] persist05 req_1dfb3bc123ca4f48944f671f96bdecf2 queued    -> completed worker=mock-kv2603
+[STATE] persist03 req_6a194b8901664f87a2484a5bee086ba5 queued    -> completed worker=mock-kv2601
+[STATE] persist04 req_509f245f76234568b30c00cc40ae0f4f queued    -> running   worker=mock-kv2601
+[STATE] persist02 req_65f7b867a2c548328eed43b80dd8eb46 queued    -> completed worker=mock-kv2602
+[STATE] persist04 req_509f245f76234568b30c00cc40ae0f4f running   -> completed worker=mock-kv2601
+
+Worker ownership snapshots: NO CONFLICT OK
+
+================================================================
+PHASE 4 - Audit Events
+================================================================
+[AUDIT] persist01 PASS
+[AUDIT] persist02 PASS
+[AUDIT] persist03 PASS
+[AUDIT] persist04 PASS
+[AUDIT] persist05 PASS
+
+============================================================
+CENTRAL RESTART PERSISTENCE CHECK
+============================================================
+
+现在请重启 Central Server。
+
+例如：
+
+Ctrl+C
+
+重新运行：
+
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+或者：
+
+sudo systemctl restart kv260-central
+
+重启完成后按 Enter。
+Restarting ONLY this harness-owned temporary Central
+
+================================================================
+PHASE 5A - Original Request ID Persistence
+================================================================
+[PERSIST] persist01 PASS req_a1acbcdf4cb241dd86c90a93c5b437fa completed
+[PERSIST] persist02 PASS req_65f7b867a2c548328eed43b80dd8eb46 completed
+[PERSIST] persist03 PASS req_6a194b8901664f87a2484a5bee086ba5 completed
+[PERSIST] persist04 PASS req_509f245f76234568b30c00cc40ae0f4f completed
+[PERSIST] persist05 PASS req_1dfb3bc123ca4f48944f671f96bdecf2 completed
+
+================================================================
+PHASE 5B - Artifact Metadata Persistence
+================================================================
+[ARTIFACT PERSIST] persist01 PASS art_497be65b09274e3cbe87b2de175870bc v1
+[ARTIFACT PERSIST] persist02 PASS art_506ce53390ab497ea3098830c59d5f7e v1
+[ARTIFACT PERSIST] persist03 PASS art_3c0dd3ecab2147829a7376b4f6ed676f v1
+[ARTIFACT PERSIST] persist04 PASS art_e8b0209d0b5d4acfb20e032ccd00e832 v1
+[ARTIFACT PERSIST] persist05 PASS art_b74ba52bbf0e40069bc8e2351266c52d v1
+
+================================================================
+PHASE 5C - AuditEvent Persistence
+================================================================
+[AUDIT] persist01 PERSIST
+[AUDIT] persist02 PERSIST
+[AUDIT] persist03 PERSIST
+[AUDIT] persist04 PERSIST
+[AUDIT] persist05 PERSIST
+
+================================================================
+RESULT
+================================================================
+Student      Artifact                               Request                                Worker         Status
+persist01    art_497be65b09274e3cbe87b2de175870bc   req_a1acbcdf4cb241dd86c90a93c5b437fa   mock-kv2602    completed
+persist02    art_506ce53390ab497ea3098830c59d5f7e   req_65f7b867a2c548328eed43b80dd8eb46   mock-kv2602    completed
+persist03    art_3c0dd3ecab2147829a7376b4f6ed676f   req_6a194b8901664f87a2484a5bee086ba5   mock-kv2601    completed
+persist04    art_e8b0209d0b5d4acfb20e032ccd00e832   req_509f245f76234568b30c00cc40ae0f4f   mock-kv2601    completed
+persist05    art_b74ba52bbf0e40069bc8e2351266c52d   req_1dfb3bc123ca4f48944f671f96bdecf2   mock-kv2603    completed
+
+Completed : 5
+Failed    : 0
+
+MULTI-STUDENT HTTP TEST: PASS
+Persistence means the old request_id survived a Central process restart via SQLite central.db; asyncio.Lock, background tasks, and Python objects were re-created and are not the persistence mechanism.
+ISOLATED HTTP REGRESSION: PASS
+Test artifacts and logs: /tmp/kv260-http-regression-bxr_zccn

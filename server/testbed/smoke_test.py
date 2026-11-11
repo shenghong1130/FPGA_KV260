@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from .design_fixture import make_bit, make_hwh
+
 SMOKE_PASSWORD = "smoke-password"
 
 
@@ -32,8 +34,8 @@ async def wait_for(client: httpx.AsyncClient, url: str, timeout: float = 15) -> 
 
 async def upload(client: httpx.AsyncClient, base: str, student: str,
                  marker: str) -> dict[str, Any]:
-    bit = f"fake-bit:{student}:{marker}".encode()
-    hwh = f'<SYSTEM NAME="{marker}"><MODULES/></SYSTEM>'.encode()
+    bit = make_bit(f"{student}:{marker}".encode())
+    hwh = make_hwh()
     response = await client.post(f"{base}/fpga/artifacts",
         data={"student_id": student, "password": SMOKE_PASSWORD}, files={
             "bit": ("design.bit", io.BytesIO(bit), "application/octet-stream"),

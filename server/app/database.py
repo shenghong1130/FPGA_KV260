@@ -12,6 +12,12 @@ class Database:
         self.sessions = sessionmaker(self.engine, class_=Session, expire_on_commit=False)
 
     def initialize(self) -> None:
+        if self.engine.dialect.name == "sqlite":
+            # WAL allows monitoring reads alongside scheduler commits. FULL
+            # retains durable ownership commits across power loss.
+            with self.engine.connect() as connection:
+                connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+                connection.exec_driver_sql("PRAGMA synchronous=FULL")
         Base.metadata.create_all(self.engine)
         if self.engine.dialect.name == "sqlite":
             self._upgrade_sqlite()
@@ -23,6 +29,10 @@ class Database:
                 column["name"]
                 for column in inspect(connection).get_columns("predict_requests")
             }
+            if "deploy_attempts" not in columns:
+                connection.execute(text(
+                    "ALTER TABLE predict_requests ADD COLUMN deploy_attempts INTEGER NOT NULL DEFAULT 0"
+                ))
             if "worker_id" not in columns:
                 connection.execute(text(
                     "ALTER TABLE predict_requests ADD COLUMN worker_id VARCHAR(64)"

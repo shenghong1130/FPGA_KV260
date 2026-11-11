@@ -26,6 +26,7 @@ AUDIT_EVENT_TYPES: tuple[tuple[str, str], ...] = (
     ("WORKER_ASSIGNED", "Worker 分配"),
     ("WORKER_ONLINE", "Worker 上线"),
     ("WORKER_OFFLINE", "Worker 离线"),
+    ("WORKER_QUARANTINED", "Worker 已隔离，等待所有权恢复"),
     ("WORKER_RELEASED", "Worker 释放"),
     ("ADMIN_WORKER_RELEASE", "管理员释放 Worker"),
     ("FPGA_DEPLOYED", "FPGA 部署成功"),

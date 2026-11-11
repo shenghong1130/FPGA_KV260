@@ -14,6 +14,8 @@ from app.db_models import Artifact, Worker
 from app.main import create_app
 from app.worker_client import WorkerClientError
 
+from testbed.design_fixture import make_bit, make_hwh
+
 TEST_PASSWORD = "correct123"
 
 
@@ -110,7 +112,7 @@ class FakeWorkerClient:
 
     async def release(self, worker: Worker, lease_id: str) -> dict[str, Any]:
         state = self._state(worker.board)
-        if state["lease_id"] != lease_id:
+        if state["lease_id"] not in (None, lease_id):
             raise WorkerClientError("wrong lease")
         state["lease_id"] = None
         state["artifact_id"] = None
@@ -161,11 +163,13 @@ async def upload(
     client: httpx.AsyncClient,
     student: str = "student-a",
     bit: bytes = b"fake-bit",
-    hwh: bytes = b"<SYSTEM><MODULES/></SYSTEM>",
+    hwh: bytes = make_hwh(),
     bit_name: str = "design.bit",
     hwh_name: str = "design.hwh",
     password: str = TEST_PASSWORD,
 ) -> dict[str, Any]:
+    if bit and not bit.startswith(b"\x00\x09"):
+        bit = make_bit(bit)
     response = await client.post(
         "/fpga/artifacts",
         data={"student_id": student, "password": password},

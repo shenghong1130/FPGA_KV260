@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .design_fixture import make_bit, make_hwh
+
 import asyncio
 import hashlib
 from pathlib import Path
@@ -66,8 +68,8 @@ async def deploy(
     client: httpx.AsyncClient,
     lease_id: str = "lease_1",
     artifact_id: str = "art_1",
-    bit_data: bytes = b"bitstream",
-    hwh_data: bytes = b"<SYSTEM><MODULES/></SYSTEM>",
+    bit_data: bytes = make_bit(),
+    hwh_data: bytes = make_hwh(),
     bit_sha256: str | None = None,
     hwh_sha256: str | None = None,
 ) -> httpx.Response:

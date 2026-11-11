@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import re
 import socket
 from contextlib import asynccontextmanager
@@ -95,6 +96,7 @@ def create_app(
         except WorkerConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
+            logging.getLogger(__name__).exception("FPGA deployment failed lease=%s artifact=%s", lease_id, artifact_id)
             raise HTTPException(
                 status_code=500, detail=f"PYNQ Overlay deployment failed: {exc}"
             ) from exc
@@ -107,7 +109,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PredictPayloadError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except FpgaExecutionError as exc:
+        except Exception as exc:
+            logging.getLogger(__name__).exception("FPGA predict failed lease=%s", body.lease_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @application.post("/internal/release")
@@ -116,6 +119,11 @@ def create_app(
             return await state.release(body.lease_id)
         except WorkerConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WorkerValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            logging.getLogger(__name__).exception("FPGA release failed lease=%s", body.lease_id)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return application
 

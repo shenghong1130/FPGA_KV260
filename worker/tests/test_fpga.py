@@ -255,3 +255,38 @@ async def test_partial_buffer_allocation_failure_cleans_first_buffer(
     assert allocated[0].freed is True
     assert backend.overlay is backend.dma is None
     assert backend.x_buffer is backend.y_buffer is None
+
+
+@pytest.mark.asyncio
+async def test_dma_stop_failure_keeps_cma_buffers_until_safe_release(tmp_path):
+    backend, _, dma, buffers, bit = make_backend(tmp_path)
+    await backend.load_overlay(bit)
+    # make_backend returns events, overlay, buffers; use backend DMA directly.
+    channel = backend.dma.sendchannel
+    def failed_stop():
+        raise RuntimeError('DMA still active')
+    channel.stop = failed_stop
+    with pytest.raises(RuntimeError, match='cannot safely stop DMA'):
+        await backend.release()
+    assert backend.x_buffer is not None and backend.y_buffer is not None
+    assert not any(buffer.freed for buffer in buffers)
+    channel.stop = lambda: None
+    await backend.release()
+    assert all(buffer.freed for buffer in buffers)
+
+
+@pytest.mark.asyncio
+async def test_buffer_free_failure_retains_only_failed_resource_for_retry(tmp_path):
+    backend, _, _, buffers, bit = make_backend(tmp_path)
+    await backend.load_overlay(bit)
+    original = buffers[0].freebuffer
+    def failed_free():
+        raise RuntimeError('CMA release failed')
+    buffers[0].freebuffer = failed_free
+    with pytest.raises(RuntimeError, match='CMA release failed'):
+        await backend.release()
+    assert backend.x_buffer is buffers[0] and backend.y_buffer is None
+    assert buffers[1].freed
+    buffers[0].freebuffer = original
+    await backend.release()
+    assert backend.x_buffer is None and buffers[0].freed

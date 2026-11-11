@@ -259,7 +259,7 @@ function workerCard(worker) {
   const badge = node("span", { className: `state-badge status-${key}` }, [node("span", { text: key.toUpperCase() }), node("small", { text: statusText[key] || "未知" })]);
   card.append(node("div", { className: "worker-head" }, [node("strong", { text: worker.board || "—" }), badge]));
   const fields = node("dl", { className: "worker-fields" });
-  const pairs = [["Student", worker.student_id], ["Artifact", worker.artifact_id], ["FPGA Ready", worker.fpga_ready ? "Yes" : "No"], ["Last Seen", relativeTime(worker.last_seen)], ["Error", worker.last_error]];
+  const pairs = [["Student", worker.student_id], ["Artifact", worker.artifact_id], ["FPGA Ready（最近确认）", worker.fpga_ready ? "Yes" : "No"], ["Last Seen", relativeTime(worker.last_seen)], ["Error", worker.last_error]];
   for (const [label, value] of pairs) {
     const detail = node("dd", { title: value ? String(value) : "" });
     detail.append(label === "Student" ? studentLink(value) : document.createTextNode(value || "—"));
@@ -292,7 +292,7 @@ function renderWorkerGrid(container, workers) {
 function openWorker(worker) {
   const content = $("#worker-dialog-content"); clear(content);
   const list = node("dl", { className: "detail-grid" });
-  const rows = [["Board", worker.board], ["State", stateLabel(worker.state)], ["Student", worker.student_id], ["Lease ID", worker.lease_id], ["Artifact ID", worker.artifact_id], ["FPGA Ready", worker.fpga_ready ? "Yes" : "No"], ["Last Seen", formatTime(worker.last_seen)], ["Last Error", worker.last_error]];
+  const rows = [["Board", worker.board], ["State", stateLabel(worker.state)], ["Student", worker.student_id], ["Lease ID", worker.lease_id], ["Artifact ID", worker.artifact_id], ["FPGA Ready（最近确认）", worker.fpga_ready ? "Yes" : "No"], ["Last Seen", formatTime(worker.last_seen)], ["Last Error", worker.last_error]];
   for (const [label, value] of rows) {
     const detail = node("dd", { title: value ? String(value) : "" });
     detail.append(label === "Student" ? studentLink(value) : document.createTextNode(value || "—"));

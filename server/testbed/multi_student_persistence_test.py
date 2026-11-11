@@ -8,7 +8,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -523,6 +523,7 @@ async def phase5_restart(
     server: str,
     runs: list[StudentRun],
     timeout: float,
+    restart: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     banner("CENTRAL RESTART PERSISTENCE CHECK", 60)
     print(
@@ -536,7 +537,10 @@ async def phase5_restart(
         "重启完成后按 Enter。",
         flush=True,
     )
-    await asyncio.to_thread(input)
+    if restart is None:
+        await asyncio.to_thread(input)
+    else:
+        await restart()
     await wait_for_restart(client, server, timeout)
 
     banner("PHASE 5A - Original Request ID Persistence")

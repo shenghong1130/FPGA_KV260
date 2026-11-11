@@ -15,6 +15,7 @@ from app.db_models import (
     StudentLease,
 )
 from .conftest import TEST_PASSWORD, password_headers, predict, upload
+from testbed.design_fixture import make_bit, make_hwh
 
 pytestmark = pytest.mark.asyncio
 
@@ -185,8 +186,8 @@ async def test_concurrent_first_registration_has_one_authoritative_password(
             "/fpga/artifacts",
             data={"student_id": "racing-student", "password": password},
             files={
-                "bit": ("design.bit", content),
-                "hwh": ("design.hwh", b"<SYSTEM/>")
+                "bit": ("design.bit", make_bit(content)),
+                "hwh": ("design.hwh", make_hwh())
             },
         )
 

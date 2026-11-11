@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import logging
 import uuid
 from collections import defaultdict
@@ -10,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .audit import AuditLogger
+from .hardware_validation import HardwareValidationError, validate_paths
 from .config import Settings
 from .db_models import (
     Artifact, ArtifactStatus, LeaseStatus, PredictRequestRecord, RequestStatus,
@@ -72,6 +74,17 @@ class LeaseManager:
                 failed.append(
                     (request.student_id, request.id, request.artifact_id, request.error)
                 )
+            for lease in database.scalars(select(StudentLease).where(
+                    StudentLease.state.in_([LeaseStatus.RESERVED.value,
+                                           LeaseStatus.DEPLOYING.value,
+                                           LeaseStatus.BUSY.value,
+                                           LeaseStatus.RELEASING.value]))).all():
+                lease.state = LeaseStatus.LOST.value
+                lease.error = "Central restarted during an unfinished operation"
+                if lease.worker_id:
+                    worker = database.get(Worker, lease.worker_id)
+                    if worker and worker.lease_id == lease.lease_id:
+                        worker.state = WorkerState.ERROR.value
             database.commit()
         for student_id, request_id, artifact_id, error in failed:
             self.audit.record(
@@ -238,6 +251,8 @@ class LeaseManager:
 
     @staticmethod
     def _queue(lease: StudentLease) -> None:
+        if lease.lease_id or lease.worker_id:
+            raise RuntimeError("cannot queue a lease before confirmed remote release")
         if lease.state != LeaseStatus.QUEUED.value:
             lease.queued_at = utcnow()
         lease.state = LeaseStatus.QUEUED.value
@@ -250,8 +265,28 @@ class LeaseManager:
             lease = database.get(StudentLease, student_id)
             if lease is None:
                 return
-            if lease.state in {LeaseStatus.UNASSIGNED.value, LeaseStatus.ERROR.value,
-                               LeaseStatus.LOST.value}:
+            needs_cleanup = lease.state in {LeaseStatus.ERROR.value, LeaseStatus.LOST.value}
+        if needs_cleanup:
+            if not await self._release_locked(student_id, "failure recovery", recovery=True):
+                return
+        with self.sessions() as database:
+            lease = database.get(StudentLease, student_id)
+            if not lease.worker_id and not lease.lease_id:
+                for exhausted in database.scalars(select(PredictRequestRecord).where(
+                        PredictRequestRecord.student_id == student_id,
+                        PredictRequestRecord.status == RequestStatus.QUEUED.value,
+                        PredictRequestRecord.deploy_attempts >= 3)).all():
+                    exhausted.status = RequestStatus.FAILED.value
+                    exhausted.error = "deployment retry budget exhausted (3 attempts)"
+                    exhausted.completed_at = utcnow()
+                has_pending = database.scalar(select(PredictRequestRecord.id).where(
+                    PredictRequestRecord.student_id == student_id,
+                    PredictRequestRecord.status == RequestStatus.QUEUED.value).limit(1))
+                if not has_pending:
+                    lease.state = LeaseStatus.UNASSIGNED.value
+                    database.commit()
+                    return
+            if lease.state == LeaseStatus.UNASSIGNED.value:
                 self._queue(lease)
                 database.commit()
             has_worker = bool(lease.worker_id and lease.lease_id)
@@ -295,6 +330,16 @@ class LeaseManager:
                 lease.error = "worker ownership or artifact unavailable"
                 database.commit()
                 return False
+            if artifact.status != ArtifactStatus.READY.value:
+                record.status = RequestStatus.FAILED.value
+                record.error = "Artifact is not READY; upload a compatible design"
+                record.completed_at = utcnow()
+                lease.state = LeaseStatus.ERROR.value
+                lease.error = record.error
+                worker.state = WorkerState.ERROR.value
+                worker.last_error = record.error
+                database.commit()
+                return False
             if (lease.current_artifact_id == artifact.id and
                     worker.current_artifact_id == artifact.id and
                     worker.state in {WorkerState.READY.value, WorkerState.BUSY.value}):
@@ -305,12 +350,54 @@ class LeaseManager:
             artifact_id = artifact.id
             lease.state = LeaseStatus.DEPLOYING.value
             worker.state = WorkerState.DEPLOYING.value
+            worker.fpga_ready = 0
             database.commit()
 
         # No SQLAlchemy Session is open during the potentially 120-second
         # Worker deployment request.
         try:
-            await self.client.deploy(worker, lease_id, artifact)
+            # Revalidate old READY artifacts too, before any Worker mutation.
+            try:
+                await asyncio.to_thread(
+                    validate_paths, Path(artifact.bit_path), Path(artifact.hwh_path),
+                    artifact.bit_sha256, artifact.hwh_sha256,
+                )
+            except (HardwareValidationError, OSError) as exc:
+                raise WorkerClientError(str(exc), permanent=True) from exc
+            for attempt in range(3):
+                # Persist before I/O: timeouts, stale results and Central
+                # restarts cannot reset this request's total retry budget.
+                with self.sessions() as database:
+                    pending = database.get(PredictRequestRecord, request_id)
+                    current = database.get(StudentLease, student_id)
+                    target = database.get(Worker, worker_board)
+                    if (pending is None or pending.status != RequestStatus.QUEUED.value or
+                            current is None or current.lease_id != lease_id or
+                            current.state != LeaseStatus.DEPLOYING.value or
+                            target is None or target.lease_id != lease_id or
+                            target.base_url != worker_base_url or
+                            target.state != WorkerState.DEPLOYING.value):
+                        return False
+                    if pending.deploy_attempts >= 3:
+                        raise WorkerClientError("deployment retry budget exhausted (3 attempts)")
+                    pending.deploy_attempts += 1
+                    database.commit()
+                try:
+                    await self.client.deploy(worker, lease_id, artifact)
+                    break
+                except WorkerClientError as exc:
+                    if not exc.retryable or exc.permanent or attempt == 2:
+                        raise
+                    await asyncio.sleep(0.1 * (2 ** attempt))
+                    with self.sessions() as database:
+                        current = database.get(StudentLease, student_id)
+                        current_worker = database.get(Worker, worker_board)
+                        if (current is None or current.lease_id != lease_id or
+                                current.state != LeaseStatus.DEPLOYING.value or
+                                current_worker is None or current_worker.lease_id != lease_id or
+                                current_worker.base_url != worker_base_url or
+                                current_worker.state != WorkerState.DEPLOYING.value):
+                            return False
         except WorkerClientError as exc:
             with self.sessions() as database:
                 lease = database.get(StudentLease, student_id)
@@ -318,10 +405,23 @@ class LeaseManager:
                 if (lease is not None and worker is not None and
                         lease.lease_id == lease_id and worker.lease_id == lease_id and
                         lease.state == LeaseStatus.DEPLOYING.value):
-                    self._queue(lease)
+                    lease.state = LeaseStatus.ERROR.value
                     lease.error = str(exc)
                     worker.state = WorkerState.ERROR.value
                     worker.last_error = str(exc)
+                    worker.fpga_ready = 0
+                    if exc.permanent:
+                        database.get(Artifact, artifact_id).status = ArtifactStatus.FAILED.value
+                    # Terminalize these requests; automatic cleanup must never
+                    # requeue the same failing deployment across the cluster.
+                    for pending in database.scalars(select(PredictRequestRecord).where(
+                            PredictRequestRecord.student_id == student_id,
+                            PredictRequestRecord.artifact_id == artifact_id,
+                            PredictRequestRecord.status == RequestStatus.QUEUED.value)).all():
+                        pending.status = RequestStatus.FAILED.value
+                        pending.error = str(exc)
+                        pending.worker_id = worker_board
+                        pending.completed_at = utcnow()
                     database.commit()
             self.allocator_event.set()
             self.audit.record(
@@ -344,7 +444,8 @@ class LeaseManager:
             if (lease is None or worker is None or lease.lease_id != lease_id or
                     worker.lease_id != lease_id or
                     worker.base_url != worker_base_url or
-                    lease.state != LeaseStatus.DEPLOYING.value):
+                    lease.state != LeaseStatus.DEPLOYING.value or
+                    worker.state != WorkerState.DEPLOYING.value):
                 return False
             lease.current_artifact_id = artifact_id
             lease.state = LeaseStatus.READY.value
@@ -369,7 +470,8 @@ class LeaseManager:
         while True:
             with self.sessions() as database:
                 lease = database.get(StudentLease, student_id)
-                if lease is None or not lease.worker_id or not lease.lease_id:
+                if (lease is None or not lease.worker_id or not lease.lease_id or
+                        lease.state not in {LeaseStatus.RESERVED.value, LeaseStatus.READY.value}):
                     return
                 record = database.scalar(select(PredictRequestRecord).where(
                     PredictRequestRecord.student_id == student_id,
@@ -440,10 +542,13 @@ class LeaseManager:
                     record.status = RequestStatus.FAILED.value
                     record.error = str(exc)
                     record.completed_at = utcnow()
-                    self._queue(lease)
-                    lease.error = str(exc)
-                    worker.state = WorkerState.ERROR.value
-                    worker.last_error = str(exc)
+                    bad_payload = exc.status_code == 422
+                    lease.state = LeaseStatus.READY.value if bad_payload else LeaseStatus.ERROR.value
+                    lease.error = None if bad_payload else str(exc)
+                    worker.state = WorkerState.READY.value if bad_payload else WorkerState.ERROR.value
+                    worker.last_error = None if bad_payload else str(exc)
+                    if not bad_payload:
+                        worker.fpga_ready = 0
                     database.commit()
                     completed_at = record.completed_at
                 duration = (
@@ -461,6 +566,8 @@ class LeaseManager:
                     details={"duration": duration, "error": str(exc)},
                 )
                 self.allocator_event.set()
+                if bad_payload:
+                    continue
                 return
 
             with self.sessions() as database:
@@ -471,6 +578,7 @@ class LeaseManager:
                         lease.lease_id != lease_id or worker.lease_id != lease_id or
                         worker.base_url != worker_base_url or
                         lease.state != LeaseStatus.BUSY.value or
+                        worker.state != WorkerState.BUSY.value or
                         record.status != RequestStatus.RUNNING.value):
                     return
                 # Worker ownership and board identity are internal details.
@@ -511,10 +619,14 @@ class LeaseManager:
                 await self.allocator_event.wait()
                 self.allocator_event.clear()
                 while student_id := await self.scheduler.oldest_queued_student():
-                    async with self.student_locks[student_id]:
-                        before = (await self.student_status(student_id))["lease_state"]
-                        await self._process_student_locked(student_id)
-                        after = (await self.student_status(student_id))["lease_state"]
+                    try:
+                        async with self.student_locks[student_id]:
+                            before = (await self.student_status(student_id))["lease_state"]
+                            await self._process_student_locked(student_id)
+                            after = (await self.student_status(student_id))["lease_state"]
+                    except Exception:
+                        LOGGER.exception("allocator failed for student=%s", student_id)
+                        break
                     if before == after == "queued":
                         break
         except asyncio.CancelledError:
@@ -573,13 +685,16 @@ class LeaseManager:
         expected_worker_id: str | None = None,
         expected_lease_id: str | None = None,
         raise_on_worker_error: bool = False,
+        recovery: bool = False,
     ) -> bool:
         # Publish RELEASING while holding the existing lock order, then close
         # the database Session before the Worker HTTP request.
         async with self.scheduler.allocation_lock:
             with self.sessions() as database:
                 lease = database.get(StudentLease, student_id)
-                if (lease is None or lease.state != LeaseStatus.READY.value or
+                if (lease is None or lease.state not in (
+                        {LeaseStatus.ERROR.value, LeaseStatus.LOST.value, LeaseStatus.RELEASING.value}
+                        if recovery else {LeaseStatus.READY.value}) or
                         not lease.worker_id or not lease.lease_id or
                         (expected_worker_id is not None and
                          lease.worker_id != expected_worker_id) or
@@ -592,18 +707,21 @@ class LeaseManager:
                     PredictRequestRecord.status.in_([
                         RequestStatus.QUEUED.value, RequestStatus.RUNNING.value])))
                 worker = database.get(Worker, lease.worker_id)
-                if (pending or worker is None or
-                        worker.state != WorkerState.READY.value or
+                if ((pending and not recovery) or worker is None or
+                        (not recovery and worker.state != WorkerState.READY.value) or
                         worker.lease_id != lease.lease_id):
                     return False
                 lease_id = lease.lease_id
                 worker_board = worker.board
                 worker_base_url = worker.base_url
                 lease.state = LeaseStatus.RELEASING.value
+                worker.state = WorkerState.ERROR.value if recovery else WorkerState.READY.value
                 database.commit()
 
         try:
-            await self.client.release(worker, lease_id)
+            acknowledgement = await self.client.release(worker, lease_id)
+            if acknowledgement.get("ok") is not True or acknowledgement.get("lease_id") != lease_id:
+                raise WorkerClientError("release acknowledgement identity mismatch")
         except WorkerClientError as exc:
             async with self.scheduler.allocation_lock:
                 with self.sessions() as database:
@@ -640,6 +758,8 @@ class LeaseManager:
                 lease.current_artifact_id = None
                 lease.released_at = utcnow()
                 lease.error = None
+                if recovery and pending:
+                    self._queue(lease)
                 database.commit()
                 LOGGER.info("lease released: student_id=%s reason=%s", student_id, reason)
         self.audit.record(
@@ -656,7 +776,10 @@ class LeaseManager:
         try:
             while True:
                 await asyncio.sleep(self.settings.lease_reaper_interval_seconds)
-                await self.reap_once()
+                try:
+                    await self.reap_once()
+                except Exception:
+                    LOGGER.exception("lease reaper iteration failed")
         except asyncio.CancelledError:
             raise
 
@@ -664,16 +787,13 @@ class LeaseManager:
         now = utcnow()
         with self.sessions() as database:
             lost = list(database.scalars(select(StudentLease).where(
-                StudentLease.state.in_([LeaseStatus.LOST.value, LeaseStatus.ERROR.value])
+                StudentLease.state.in_([LeaseStatus.LOST.value, LeaseStatus.ERROR.value,
+                                       LeaseStatus.RELEASING.value])
             )).all())
-            for lease in lost:
-                pending = database.scalar(select(func.count()).select_from(
-                    PredictRequestRecord).where(
-                    PredictRequestRecord.student_id == lease.student_id,
-                    PredictRequestRecord.status == RequestStatus.QUEUED.value))
-                if pending:
-                    self._queue(lease)
-            database.commit()
+        for lease in lost:
+            async with self.student_locks[lease.student_id]:
+                await self._release_locked(lease.student_id, "failure recovery", recovery=True)
+        with self.sessions() as database:
             queued = bool(database.scalar(select(func.count()).select_from(
                 StudentLease).where(StudentLease.state == LeaseStatus.QUEUED.value)))
             ready = list(database.scalars(select(StudentLease).where(
